@@ -6,7 +6,10 @@ on:
     paths:
       - 'windows/**'
       - '.github/workflows/build-windows.yml'
-  workflow_dispatch:  # permite correr manualmente
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build-windows:
