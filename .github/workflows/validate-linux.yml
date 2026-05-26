@@ -1,0 +1,79 @@
+name: Validar HCMaint Linux
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'linux/**'
+      - '.github/workflows/validate-linux.yml'
+  workflow_dispatch:
+
+jobs:
+  validate-linux:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Configurar Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependências do sistema
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y python3-tk python3-pip xvfb
+          pip install Pillow
+
+      - name: Validar sintaxe de todos os módulos
+        working-directory: linux
+        run: |
+          python -m py_compile main.py
+          python -m py_compile hc_theme.py
+          python -m py_compile modules/scanner.py
+          echo "Sintaxe OK em todos os ficheiros"
+
+      - name: Testar importações e scanners
+        working-directory: linux
+        run: |
+          python -c "
+          from modules.scanner import (
+              scan_apt_cache, scan_apt_orphans, scan_journal_logs,
+              scan_user_cache, scan_thumbnails, scan_trash,
+              scan_python_cache, scan_disk_usage_top,
+              fmt, SCANNERS
+          )
+          print(f'Scanners carregados: {len(SCANNERS)}')
+          
+          # Testar alguns scanners
+          r = scan_user_cache()
+          print(f'user_cache: {fmt(r[\"size\"])} em {r[\"count\"]} pastas')
+          
+          r2 = scan_apt_cache()
+          print(f'apt_cache: {fmt(r2[\"size\"])}')
+          
+          r3 = scan_journal_logs()
+          print(f'journal: removivel={fmt(r3[\"size\"])}, total={fmt(r3.get(\"total_size\",0))}')
+          
+          print('Todos os testes passaram!')
+          "
+
+      - name: Criar pacote zip para distribuição
+        run: |
+          mkdir -p release
+          zip -r release/HCMaint-linux.zip linux/ \
+            -x "linux/__pycache__/*" \
+            -x "linux/modules/__pycache__/*" \
+            -x "linux/*.pyc" \
+            -x "linux/imagens/*"
+          echo "Pacote criado:"
+          ls -lh release/
+
+      - name: Upload artefacto Linux
+        uses: actions/upload-artifact@v4
+        with:
+          name: HCMaint-Linux
+          path: release/HCMaint-linux.zip
+          retention-days: 30

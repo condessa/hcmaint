@@ -1,0 +1,107 @@
+name: Build HCCleaner Windows .exe
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'windows/**'
+      - '.github/workflows/build-windows.yml'
+  workflow_dispatch:  # permite correr manualmente
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Configurar Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependências
+        run: |
+          python -m pip install --upgrade pip
+          pip install Pillow pyinstaller
+
+      - name: Criar logo placeholder se não existir
+        shell: python
+        run: |
+          import os
+          from PIL import Image, ImageDraw, ImageFont
+          logo_path = os.path.join("windows", "imagens", "HCsoftware.png")
+          os.makedirs(os.path.dirname(logo_path), exist_ok=True)
+          if not os.path.exists(logo_path):
+              img = Image.new("RGBA", (200, 50), (0, 0, 0, 0))
+              d = ImageDraw.Draw(img)
+              d.text((10, 10), "HCsoftware", fill=(74, 144, 217))
+              img.save(logo_path)
+              print(f"Logo placeholder criado: {logo_path}")
+          else:
+              print(f"Logo já existe: {logo_path}")
+
+      - name: Compilar HCCleaner.exe com PyInstaller
+        working-directory: windows
+        run: |
+          pyinstaller --noconfirm --onefile --windowed `
+            --name "HCCleaner" `
+            --add-data "imagens;imagens" `
+            --add-data "hc_theme.py;." `
+            --add-data "modules;modules" `
+            --uac-admin `
+            main.py
+
+      - name: Verificar executável gerado
+        working-directory: windows
+        run: |
+          dir dist\
+          echo "Tamanho do executavel:"
+          (Get-Item dist\HCCleaner.exe).length / 1MB
+
+      - name: Obter versão do executável
+        id: version
+        shell: bash
+        run: |
+          # Extrair versão do main.py
+          VERSION=$(grep -oP 'v[\d.]+' windows/main.py | head -1 || echo "v1.0.0")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Versao: $VERSION"
+
+      - name: Upload artefacto (para testes)
+        uses: actions/upload-artifact@v4
+        with:
+          name: HCCleaner-Windows
+          path: windows/dist/HCCleaner.exe
+          retention-days: 30
+
+      - name: Criar Release automática
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: windows-${{ steps.version.outputs.version }}-build${{ github.run_number }}
+          name: "🪟 HCCleaner ${{ steps.version.outputs.version }} (Windows)"
+          body: |
+            ## 🪟 HCCleaner para Windows
+            
+            Compilado automaticamente a partir do código em `windows/`
+            
+            ### Instalação
+            1. Descarregar `HCCleaner.exe`
+            2. Executar como Administrador (UAC pedido automaticamente)
+            3. Não requer Python instalado
+            
+            ### Funcionalidades
+            - 🧹 Limpeza de ficheiros temporários (13 categorias)
+            - 🔑 Limpeza do Registo do Windows
+            - 📦 Gestor de Programas Instalados
+            - 🦠 Detecção Heurística de Ameaças
+            
+            ### Commit
+            `${{ github.sha }}`
+          files: |
+            windows/dist/HCCleaner.exe
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
