@@ -1,108 +1,127 @@
-# 🛡️ HCCleaner v1.0.0
-**HCsoftware** — Ferramenta de Manutenção e Limpeza do Windows
+# 🛡️ HCMaint Suite
+**HCsoftware** — Ferramentas de Manutenção e Limpeza do Sistema
 
-Alternativa ao CCleaner — sem bloatware, sem telemetria, código aberto.
+Suite completa de manutenção para **Linux** e **Windows**, desenvolvida em Python/Tkinter
+com o tema visual HCsoftware. Alternativa limpa ao CCleaner (Windows) e BleachBit (Linux)
+— sem telemetria, sem bloatware, código aberto.
 
----
-
-## ✨ Funcionalidades
-
-### 🧹 Limpeza de Ficheiros
-- Temporários do Windows (`%TEMP%`, `C:\Windows\Temp`)
-- Cache dos browsers (Chrome, Firefox, Edge)
-- Prefetch do Windows
-- Cache do Windows Update
-- Miniaturas e cache de ícones
-- Ficheiros recentes e atalhos
-- Relatórios de erros (WER)
-- Dumps de memória
-- Logs do sistema
-- Reciclagem
-
-### 🔑 Limpeza do Registo
-- Entradas de arranque inválidas (HKCU + HKLM)
-- Desinstaladores órfãos (programas já removidos)
-- DLLs partilhadas inexistentes
-- Associações de ficheiros inválidas
-- Caminhos de aplicação inválidos
-- Listas MRU (ficheiros recentes)
-
-### 📦 Gestor de Programas
-- Lista todos os programas instalados
-- Pesquisa em tempo real
-- Desinstalação via desinstalador oficial
-- Acesso rápido ao Painel de Controlo
-- Mostra versão, fabricante, tamanho e data
-
-### 🦠 Detecção de Ameaças (Heurística)
-- Executáveis em pastas temporárias
-- Entradas de arranque suspeitas
-- Processos com nomes suspeitos
-- Verificação do ficheiro `hosts`
-- Lançamento do Windows Defender
+> Testado em produção: libertou **+17 GB** num Debian com uso real.
 
 ---
 
-## 🔧 Instalação e Uso
+## 📦 Projectos
 
-### Requisitos
-- Windows 10/11 (recomendado)
-- Python 3.10+ (para executar da fonte)
-- `uv` para gestão de dependências
+### 🐧 [HCMaint — Linux](./linux/)
+Ferramenta de manutenção para **Debian / Ubuntu / Linux Mint**
 
-### Executar da fonte
+| Funcionalidade | Detalhe |
+|---|---|
+| Cache APT | Remove `.deb` acumulados |
+| Pacotes Órfãos | `apt autoremove --purge` com streaming |
+| Logs Systemd | Vacuum inteligente (só conta o removível) |
+| Cache Utilizador | Selecção granular por subpasta |
+| Flatpak | Runtimes obsoletos (via flatpak nativo) |
+| Snap | Só versões removíveis — exclui `core*`/`snapd` |
+| Docker | Containers parados + imagens dangling |
+| Análise de Espaço | Barras visuais de partições + top pastas |
+
 ```bash
-# Instalar dependências
-uv pip install Pillow
-
-# Executar (como Administrador para acesso completo)
-python main.py
+cd linux
+bash run.sh              # utilizador normal
+bash run.sh --sudo       # acesso total
 ```
 
-### Compilar para .exe
+---
+
+### 🪟 [HCCleaner — Windows](./windows/)
+Ferramenta de manutenção para **Windows 10 / 11**
+
+| Funcionalidade | Detalhe |
+|---|---|
+| Limpeza de Ficheiros | Temp, cache browsers, prefetch, dumps, logs |
+| Registo do Windows | Entradas inválidas, órfãos, DLLs inexistentes |
+| Gestor de Programas | Lista + desinstalação via desinstalador oficial |
+| Detecção de Ameaças | Análise heurística + lança Windows Defender |
+
+```batch
+cd windows
+python main.py           # executar directamente
+build.bat                # compilar para .exe (requer PyInstaller)
+```
+
+---
+
+## 🎨 Tema Partilhado
+
+Ambos os projectos usam o tema visual **HCsoftware** (`shared/hc_theme.py`):
+
+| Constante | Cor | Uso |
+|---|---|---|
+| `BG_MAIN` | `#2b2b2b` | Fundo principal |
+| `ACCENT` | `#4a90d9` | Azul accent |
+| `WARNING` | `#f0ad4e` | Alertas |
+| `SUCCESS` | `#5cb85c` | Sucesso |
+| `DANGER` | `#d9534f` | Erros |
+| `YELLOW` | `#FFD700` | Valores de destaque |
+
+---
+
+## 🚀 Instalação Rápida
+
+### Linux
 ```bash
-build.bat
+sudo apt-get install python3-tk python3-pip
+cd linux && bash run.sh
 ```
-O executável gerado em `dist\HCCleaner.exe` requer privilégios de Administrador
-(configurado automaticamente via `--uac-admin`).
+
+### Windows
+```batch
+pip install Pillow
+cd windows && python main.py
+```
 
 ---
 
-## ⚠️ Notas Importantes
-
-- **Registo**: Crie sempre um ponto de restauro antes de limpar o registo.
-  `Win + R` → `rstrui` → Criar ponto de restauro.
-- **Malware**: A detecção é heurística e complementar — não substitui um antivírus.
-- **Administrador**: Algumas limpezas (Prefetch, Windows Update cache) requerem
-  privilégios elevados para acesso completo.
-- **Reciclagem**: A limpeza da reciclagem é permanente e irreversível.
-
----
-
-## 📁 Estrutura do Projeto
+## 📁 Estrutura do Repositório
 
 ```
-HCCleaner/
-├── main.py              ← Aplicação principal + interface
-├── hc_theme.py          ← Tema visual HCsoftware
-├── modules/
-│   ├── cleaner.py       ← Limpeza de ficheiros
-│   ├── registry.py      ← Limpeza do registo
-│   ├── uninstaller.py   ← Gestor de programas
-│   └── malware.py       ← Detecção de ameaças
-├── imagens/
-│   └── HCsoftware.png   ← Logótipo
-├── requirements.txt
-├── build.bat            ← Script de compilação
+hcmaint/
+├── linux/                  ← HCMaint (Debian/Ubuntu/Mint)
+│   ├── main.py
+│   ├── hc_theme.py
+│   ├── modules/
+│   │   └── scanner.py
+│   ├── run.sh
+│   └── hcmaint.desktop
+│
+├── windows/                ← HCCleaner (Windows 10/11)
+│   ├── main.py
+│   ├── hc_theme.py
+│   ├── modules/
+│   │   ├── cleaner.py
+│   │   ├── registry.py
+│   │   ├── uninstaller.py
+│   │   └── malware.py
+│   └── build.bat
+│
+├── shared/
+│   └── hc_theme.py         ← Tema HCsoftware (referência)
+│
 └── README.md
 ```
 
 ---
 
-## 📜 Licença
-HCsoftware © 2025 — Uso privado e pessoal.
+## 🛠️ Requisitos
+
+| | Linux | Windows |
+|---|---|---|
+| Python | 3.10+ | 3.10+ |
+| Tkinter | `python3-tk` | incluído |
+| Pillow | `pip install Pillow` | `pip install Pillow` |
+| Extras | — | `winreg` (incluído) |
 
 ---
 
-*Desenvolvido com ❤️ em Python/Tkinter para substituir o CCleaner
-sem as suas desvantagens modernas.*
+*HCsoftware © 2026 — Silves, Algarve, Portugal*  
+*Desenvolvido com Python 3 + Tkinter*
