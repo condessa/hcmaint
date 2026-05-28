@@ -9,8 +9,89 @@ import tempfile
 import glob
 import ctypes
 import platform
+import subprocess
 from pathlib import Path
 from datetime import datetime
+
+# ─── Detecção de Browsers em execução ─────────────────────────────────────────
+
+# Processos de browsers conhecidos e os seus nomes legíveis
+BROWSER_PROCESSES = {
+    "chrome.exe":          "Google Chrome",
+    "firefox.exe":         "Mozilla Firefox",
+    "msedge.exe":          "Microsoft Edge",
+    "brave.exe":           "Brave Browser",
+    "opera.exe":           "Opera",
+    "vivaldi.exe":         "Vivaldi",
+    "iexplore.exe":        "Internet Explorer",
+    "seamonkey.exe":       "SeaMonkey",
+    "waterfox.exe":        "Waterfox",
+    "librewolf.exe":       "LibreWolf",
+    "palemoon.exe":        "Pale Moon",
+    "basilisk.exe":        "Basilisk",
+    "tor browser.exe":     "Tor Browser",
+    "thorium.exe":         "Thorium",
+}
+
+# Categorias que requerem browsers fechados antes de limpar
+BROWSER_SENSITIVE_CATEGORIES = {
+    "windows_temp",
+    "browser_cache_chrome",
+    "browser_cache_firefox",
+    "browser_cache_edge",
+    "thumbnail_cache",
+}
+
+
+def get_running_browsers():
+    """
+    Detecta browsers em execução no Windows.
+    Retorna lista de dicts: [{"process": "chrome.exe", "name": "Google Chrome"}, ...]
+    """
+    if platform.system() != "Windows":
+        return []
+
+    running = []
+    try:
+        result = subprocess.run(
+            ["tasklist", "/fo", "csv", "/nh"],
+            capture_output=True, text=True, timeout=10,
+            creationflags=0x08000000  # CREATE_NO_WINDOW
+        )
+        seen = set()
+        for line in result.stdout.strip().splitlines():
+            parts = line.strip('"').split('","')
+            if not parts:
+                continue
+            proc_name = parts[0].lower()
+            if proc_name in BROWSER_PROCESSES and proc_name not in seen:
+                running.append({
+                    "process": proc_name,
+                    "name": BROWSER_PROCESSES[proc_name],
+                    "pid": parts[1] if len(parts) > 1 else "?"
+                })
+                seen.add(proc_name)
+    except Exception:
+        pass
+
+    return running
+
+
+def browsers_are_running():
+    """Retorna True se algum browser está em execução."""
+    return len(get_running_browsers()) > 0
+
+
+def get_running_browsers_names():
+    """Retorna lista de nomes legíveis dos browsers em execução."""
+    return [b["name"] for b in get_running_browsers()]
+
+
+def category_needs_browsers_closed(cat_key):
+    """Verifica se uma categoria requer browsers fechados."""
+    return cat_key in BROWSER_SENSITIVE_CATEGORIES
+
+
 
 # Categorias de limpeza com caminhos e padrões
 CLEAN_TARGETS = {
@@ -94,18 +175,15 @@ CLEAN_TARGETS = {
         "paths": [
             os.path.join(os.environ.get("LOCALAPPDATA", ""), r"Microsoft\Windows\Explorer"),
         ],
-        "patterns": ["thumbcache_*.db", "iconcache_*.db"],
+        # SEGURANÇA: NÃO incluir iconcache_*.db — apagar com Explorer activo
+        # corrompe ícones da barra de tarefas e do ambiente de trabalho.
+        # thumbcache_*.db são miniaturas de pré-visualização (seguras).
+        "patterns": ["thumbcache_*.db"],
         "recursive": False,
+        "requires_explorer_restart": True,
     },
-    "recent_files": {
-        "label": "Ficheiros Recentes",
-        "icon": "📂",
-        "paths": [
-            os.path.join(os.environ.get("APPDATA", ""), r"Microsoft\Windows\Recent"),
-        ],
-        "patterns": ["*.lnk"],
-        "recursive": False,
-    },
+    # recent_files REMOVIDO: apagar *.lnk em Microsoft\Windows\Recent
+    # remove atalhos da barra de tarefas e do menu Início — NÃO é seguro.
     "error_reports": {
         "label": "Relatórios de Erros",
         "icon": "⚠️",
@@ -313,6 +391,64 @@ def clean_item(item):
             return False, f"takeown falhou: {e3}"
 
     return False, "Sem permissão para remover"
+
+
+def safe_clean_thumbnails(items, progress_cb=None):
+    """
+    Limpa thumbcache_*.db com segurança:
+    1. Para o Explorer temporariamente
+    2. Apaga os ficheiros
+    3. Reinicia o Explorer
+    Retorna (cleaned_count, freed_bytes, error_count)
+    """
+    if platform.system() != "Windows":
+        return 0, 0, 0
+
+    import subprocess
+    NO_WIN = 0x08000000
+
+    if progress_cb:
+        progress_cb("A parar Windows Explorer temporariamente...")
+
+    # Parar Explorer
+    try:
+        subprocess.run(["taskkill", "/f", "/im", "explorer.exe"],
+                       capture_output=True, creationflags=NO_WIN, timeout=10)
+    except Exception:
+        pass
+
+    import time
+    time.sleep(1)
+
+    cleaned = 0
+    freed   = 0
+    errors  = 0
+
+    for item in items:
+        path = item.get("path", "")
+        if not path or not os.path.exists(path):
+            continue
+        try:
+            sz = os.path.getsize(path)
+            os.remove(path)
+            cleaned += 1
+            freed   += sz
+        except Exception:
+            errors += 1
+
+    if progress_cb:
+        progress_cb("A reiniciar Windows Explorer...")
+
+    # Reiniciar Explorer
+    try:
+        subprocess.Popen(["explorer.exe"], creationflags=NO_WIN)
+    except Exception:
+        try:
+            os.startfile("explorer.exe")
+        except Exception:
+            pass
+
+    return cleaned, freed, errors
 
 
 def get_recycle_bin_size():

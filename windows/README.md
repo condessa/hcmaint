@@ -1,5 +1,5 @@
-# 🪟 HCCleaner v1.0.0
-**HCsoftware** — Ferramenta de Manutenção e Limpeza do Windows 10/11
+# 🛡️ HCCleaner v1.0.0
+**HCsoftware** — Ferramenta de Manutenção e Limpeza do Windows
 
 Alternativa ao CCleaner — sem bloatware, sem telemetria, código aberto.
 
@@ -7,24 +7,31 @@ Alternativa ao CCleaner — sem bloatware, sem telemetria, código aberto.
 
 ## ✨ Funcionalidades
 
-### 🧹 Limpeza de Ficheiros (13 categorias)
+### 🧹 Limpeza de Ficheiros
 - Temporários do Windows (`%TEMP%`, `C:\Windows\Temp`)
 - Cache dos browsers (Chrome, Firefox, Edge)
-- Prefetch, Windows Update cache
+- Prefetch do Windows
+- Cache do Windows Update
 - Miniaturas e cache de ícones
-- Relatórios de erros (WER), Dumps de memória
-- Logs do sistema, Reciclagem
+- Ficheiros recentes e atalhos
+- Relatórios de erros (WER)
+- Dumps de memória
+- Logs do sistema
+- Reciclagem
 
 ### 🔑 Limpeza do Registo
 - Entradas de arranque inválidas (HKCU + HKLM)
-- Desinstaladores órfãos
+- Desinstaladores órfãos (programas já removidos)
 - DLLs partilhadas inexistentes
 - Associações de ficheiros inválidas
+- Caminhos de aplicação inválidos
 - Listas MRU (ficheiros recentes)
 
 ### 📦 Gestor de Programas
-- Lista todos os programas instalados com pesquisa em tempo real
+- Lista todos os programas instalados
+- Pesquisa em tempo real
 - Desinstalação via desinstalador oficial
+- Acesso rápido ao Painel de Controlo
 - Mostra versão, fabricante, tamanho e data
 
 ### 🦠 Detecção de Ameaças (Heurística)
@@ -36,47 +43,66 @@ Alternativa ao CCleaner — sem bloatware, sem telemetria, código aberto.
 
 ---
 
-## Instalação
+## 🔧 Instalação e Uso
 
 ### Requisitos
-- Windows 10 / 11
-- Python 3.10+
-- Pillow (`pip install Pillow`)
+- Windows 10/11 (recomendado)
+- Python 3.10+ (para executar da fonte)
+- `uv` para gestão de dependências
 
-### Executar
-```batch
-cd windows
+### Executar da fonte
+```bash
+# Instalar dependências
+uv pip install Pillow
+
+# Executar (como Administrador para acesso completo)
 python main.py
 ```
 
 ### Compilar para .exe
-```batch
+```bash
 build.bat
 ```
-Gera `dist\HCCleaner.exe` com elevação UAC automática.
+O executável gerado em `dist\HCCleaner.exe` requer privilégios de Administrador
+(configurado automaticamente via `--uac-admin`).
 
 ---
 
-## Estrutura
+## ⚠️ Notas Importantes
+
+- **Registo**: Crie sempre um ponto de restauro antes de limpar o registo.
+  `Win + R` → `rstrui` → Criar ponto de restauro.
+- **Malware**: A detecção é heurística e complementar — não substitui um antivírus.
+- **Administrador**: Algumas limpezas (Prefetch, Windows Update cache) requerem
+  privilégios elevados para acesso completo.
+- **Reciclagem**: A limpeza da reciclagem é permanente e irreversível.
+
+---
+
+## 📁 Estrutura do Projeto
+
 ```
-windows/
-├── main.py              <- Interface principal
-├── hc_theme.py          <- Tema HCsoftware
+HCCleaner/
+├── main.py              ← Aplicação principal + interface
+├── hc_theme.py          ← Tema visual HCsoftware
 ├── modules/
-│   ├── cleaner.py       <- 13 categorias de limpeza
-│   ├── registry.py      <- Limpeza do registo
-│   ├── uninstaller.py   <- Gestor de programas
-│   └── malware.py       <- Deteccao de ameacas
-├── build.bat            <- Compilação PyInstaller
-└── imagens/
-    └── HCsoftware.png
+│   ├── cleaner.py       ← Limpeza de ficheiros
+│   ├── registry.py      ← Limpeza do registo
+│   ├── uninstaller.py   ← Gestor de programas
+│   └── malware.py       ← Detecção de ameaças
+├── imagens/
+│   └── HCsoftware.png   ← Logótipo
+├── requirements.txt
+├── build.bat            ← Script de compilação
+└── README.md
 ```
 
 ---
 
-Nota: Crie sempre um ponto de restauro antes de limpar o registo.
-Win + R -> rstrui -> Criar ponto de restauro.
+## 📜 Licença
+HCsoftware © 2025 — Uso privado e pessoal.
 
 ---
 
-*HCsoftware 2026 - Silves, Algarve, Portugal*
+*Desenvolvido com ❤️ em Python/Tkinter para substituir o CCleaner
+sem as suas desvantagens modernas.*

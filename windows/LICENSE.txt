@@ -1,0 +1,29 @@
+HCCleaner - Ferramenta de Manutenção e Limpeza do Windows
+HCsoftware © 2026 - Silves, Algarve, Portugal
+https://github.com/condessa/hcmaint
+
+LICENÇA DE UTILIZAÇÃO
+=====================
+
+Este software é fornecido gratuitamente para uso pessoal e não comercial.
+
+PERMISSÕES:
+- Usar o software gratuitamente
+- Partilhar o software com outros utilizadores
+- Modificar o código fonte para uso pessoal
+
+RESTRIÇÕES:
+- Não é permitida a redistribuição comercial sem autorização
+- Não é permitido remover os créditos do HCsoftware
+
+AVISO:
+Este software é fornecido "tal como está", sem garantias de qualquer tipo.
+O autor não se responsabiliza por quaisquer danos causados pela utilização
+deste software. Recomenda-se sempre criar um ponto de restauro do sistema
+antes de efectuar limpezas.
+
+CÓDIGO FONTE:
+Todo o código fonte está disponível em:
+https://github.com/condessa/hcmaint
+
+© 2026 HCsoftware - Todos os direitos reservados
