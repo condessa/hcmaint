@@ -1558,8 +1558,16 @@ class HCMaint(HCApplication):
                               font=("Segoe UI", 9, "bold"),
                               bg=BG_CARD, fg=INFO, cursor="hand2", anchor=tk.W)
         email_lbl.pack(side=tk.LEFT)
-        email_lbl.bind("<Button-1>", lambda e: __import__('webbrowser').open(
-            "mailto:condessasilva@gmail.com?subject=HCMaint%20v" + APP_VERSION))
+        def open_email(e=None):
+            import subprocess, shutil
+            mailto = f"mailto:condessasilva@gmail.com?subject=HCMaint%20v{APP_VERSION}"
+            # xdg-open respeita o cliente de email predefinido do sistema
+            if shutil.which("xdg-open"):
+                subprocess.Popen(["xdg-open", mailto])
+            else:
+                __import__('webbrowser').open(mailto)
+
+        email_lbl.bind("<Button-1>", open_email)
         email_lbl.bind("<Enter>", lambda e: email_lbl.config(fg=ACCENT, font=("Segoe UI", 9, "bold underline")))
         email_lbl.bind("<Leave>", lambda e: email_lbl.config(fg=INFO,   font=("Segoe UI", 9, "bold")))
 
