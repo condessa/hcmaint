@@ -1,18 +1,15 @@
 """
-HC-Cleaner v1.3.0
-HCsoftware - Ferramenta de Manutenção e Limpeza do Windows
-Alternativa ao CCleaner — sem bloatware, sem telemetria
+HCMaint v1.0.0
+HCsoftware — Ferramenta de Manutenção do Linux (Debian/Ubuntu)
 """
 
 import os
 import sys
 import threading
-import platform
 import tkinter as tk
 from tkinter import ttk, messagebox
 from datetime import datetime
 
-# Adicionar raiz ao path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from hc_theme import (
@@ -20,1224 +17,1464 @@ from hc_theme import (
     BG_MAIN, BG_PANEL, BG_CARD, BG_TOPBAR, BG_SIDEBAR, BG_INPUT,
     ACCENT, ACCENT_HOV, ACCENT_DRK, TEXT_PRI, TEXT_SEC, TEXT_MUT,
     SUCCESS, DANGER, WARNING, INFO, GREEN, RED, YELLOW,
-    BORDER, DIVIDER, LOG_BG, LOG_SENT, LOG_RECV,
+    BORDER, DIVIDER, LOG_BG,
 )
-from modules.cleaner import (
-    CLEAN_TARGETS, scan_all, scan_category, clean_item,
-    safe_clean_thumbnails, format_size,
-    get_running_browsers, get_running_browsers_names,
-    category_needs_browsers_closed, browsers_are_running,
+from modules.scanner import (
+    scan_all, fmt, is_root, sudo_available,
+    scan_disk_usage_top,
+    clean_apt_cache, clean_apt_orphans, clean_journal_logs,
+    clean_var_logs, clean_thumbnails, clean_trash,
+    clean_user_cache_subdir, clean_flatpak_unused,
+    clean_python_cache, clean_docker_prune, clean_snap_old,
 )
-from modules.registry import scan_all_registry, delete_registry_issue, REGISTRY_CHECKS
-from modules.uninstaller import (
-    get_installed_programs, uninstall_program, force_uninstall,
-    uninstall_edge, clean_residuals, open_programs_and_features
+from modules.dev_caches import (
+    scan_dev_caches, clean_dev_cache, get_total_dev_cache_size,
+    fmt as fmt_dev,
 )
-from modules.malware import scan_all_threats, RISK_COLORS, RISK_ICONS, run_windows_defender_quick
+from modules.large_files import (
+    scan_large_files, delete_large_file, get_stats,
+    fmt as fmt_lf, EXT_ICONS,
+)
+from modules.history import (
+    load_history, add_history_entry, clear_history,
+    get_history_stats, export_report_txt, export_report_html,
+    fmt_size as fmt_hist,
+)
 
 
-# ─────────────────────────────────────────────
-# NAV BUTTON
-# ─────────────────────────────────────────────
-class NavButton(tk.Frame):
-    def __init__(self, parent, icon, label, command, **kwargs):
-        super().__init__(parent, bg=BG_SIDEBAR, cursor="hand2", **kwargs)
+# ─── Versão e Actualizações ───────────────────────────────────
+
+APP_VERSION   = "1.1.0"
+GITHUB_REPO   = "condessa/hcmaint"
+GITHUB_API    = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+GITHUB_DL_URL = f"https://github.com/{GITHUB_REPO}/archive/refs/heads/main.zip"
+
+
+def check_for_updates(current_version, callback):
+    """
+    Verifica actualizações no GitHub em background.
+    callback(latest_version, release_notes) se há actualização.
+    callback(None, None) se está actualizado ou erro.
+    """
+    import urllib.request
+    import json
+    import re
+
+    try:
+        req = urllib.request.Request(
+            GITHUB_API,
+            headers={"User-Agent": f"HCMaint/{current_version}"},
+        )
+        with urllib.request.urlopen(req, timeout=8) as r:
+            data = json.loads(r.read().decode())
+
+        tag          = data.get("tag_name", "")
+        release_body = data.get("body", "")
+
+        # Extrair versão do tag — ex: "linux-v1.1.1-build3" → "1.1.1"
+        m = re.search(r"v([0-9]+\.[0-9]+\.[0-9]+)", tag)
+        if not m:
+            # Tentar extrair de qualquer tag
+            m = re.search(r"([0-9]+\.[0-9]+\.[0-9]+)", tag)
+        if not m:
+            callback(None, None)
+            return
+
+        latest = m.group(1)
+
+        def vt(v):
+            return tuple(int(x) for x in v.split("."))
+
+        if vt(latest) > vt(current_version):
+            callback(latest, release_body)
+        else:
+            callback(None, None)
+
+    except Exception:
+        callback(None, None)
+
+
+# ─── Nav Button ───────────────────────────────────────────────
+
+class NavBtn(tk.Frame):
+    def __init__(self, parent, icon, label, command):
+        super().__init__(parent, bg=BG_SIDEBAR, cursor="hand2")
         self._cmd = command
         self._active = False
 
-        self._indicator = tk.Frame(self, bg=BG_SIDEBAR, width=3)
-        self._indicator.pack(side=tk.LEFT, fill=tk.Y)
+        self._bar = tk.Frame(self, bg=BG_SIDEBAR, width=3)
+        self._bar.pack(side=tk.LEFT, fill=tk.Y)
 
         inner = tk.Frame(self, bg=BG_SIDEBAR)
-        inner.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=6, pady=7)
+        inner.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=8, pady=10)
 
-        tk.Label(inner, text=icon, font=("Segoe UI Emoji", 13),
-                 bg=BG_SIDEBAR, fg=TEXT_SEC).pack(side=tk.LEFT, padx=(0, 6))
-        self._lbl = tk.Label(inner, text=label, font=("Segoe UI", 9),
+        tk.Label(inner, text=icon, font=("Segoe UI Emoji", 15),
+                 bg=BG_SIDEBAR, fg=TEXT_SEC).pack(side=tk.LEFT, padx=(0, 8))
+        self._lbl = tk.Label(inner, text=label, font=("Segoe UI", 10),
                               bg=BG_SIDEBAR, fg=TEXT_SEC, anchor=tk.W)
         self._lbl.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-        for w in [self, inner, self._lbl]:
-            w.bind("<Button-1>", self._click)
-            w.bind("<Enter>", self._hover_on)
-            w.bind("<Leave>", self._hover_off)
+        for w in (self, inner, self._lbl):
+            w.bind("<Button-1>", lambda e: self._cmd())
+            w.bind("<Enter>", self._on)
+            w.bind("<Leave>", self._off)
 
-    def _click(self, e=None):
-        self._cmd()
-
-    def _hover_on(self, e=None):
+    def _on(self, e=None):
         if not self._active:
-            for w in [self, self.winfo_children()[1]]:
-                w.configure(bg=BG_PANEL)
+            self.configure(bg=BG_PANEL)
+            self.winfo_children()[1].configure(bg=BG_PANEL)
             self._lbl.configure(bg=BG_PANEL)
 
-    def _hover_off(self, e=None):
+    def _off(self, e=None):
         if not self._active:
-            for w in [self, self.winfo_children()[1]]:
-                w.configure(bg=BG_SIDEBAR)
+            self.configure(bg=BG_SIDEBAR)
+            self.winfo_children()[1].configure(bg=BG_SIDEBAR)
             self._lbl.configure(bg=BG_SIDEBAR)
 
-    def set_active(self, active):
-        self._active = active
-        bg = BG_CARD if active else BG_SIDEBAR
-        fg = ACCENT if active else TEXT_SEC
-        ind = ACCENT if active else BG_SIDEBAR
-        self._indicator.configure(bg=ind)
+    def set_active(self, v):
+        self._active = v
+        bg = BG_CARD if v else BG_SIDEBAR
+        fg = ACCENT if v else TEXT_SEC
+        self._bar.configure(bg=ACCENT if v else BG_SIDEBAR)
         self.configure(bg=bg)
         self.winfo_children()[1].configure(bg=bg)
         self._lbl.configure(bg=bg, fg=fg,
-                             font=("Segoe UI", 10, "bold") if active else ("Segoe UI", 10))
+                             font=("Segoe UI", 10, "bold") if v else ("Segoe UI", 10))
 
 
-# ─────────────────────────────────────────────
-# MAIN APPLICATION
-# ─────────────────────────────────────────────
-class HCCleaner(HCApplication):
+# ─── Main App ─────────────────────────────────────────────────
+
+class HCMaint(HCApplication):
     def __init__(self):
-        super().__init__(title="", geometry="1100x680")
+        super().__init__(title=f"HCMaint v{APP_VERSION} — Manutenção Linux", geometry="1280x760")
         self.resizable(True, True)
 
         self._pages = {}
-        self._nav_btns = {}
-        self._current_page = None
-
-        self._cleaner_results = {}
-        self._registry_issues = []
-        self._malware_findings = []
-        self._programs_list = []
+        self._nav = {}
+        self._current = None
+        self._scan_results = []
+        self._selected_result = None
 
         self._build_layout()
-        self._show_page("dashboard")
-        self.set_status("HC-Cleaner pronto  •  " + platform.platform(), "info")
+        self._show("dashboard")
 
-    # ──────────── LAYOUT ────────────
+        # Info de root
+        if is_root():
+            self.set_status("A correr como root — acesso total", "success")
+        elif sudo_available():
+            self.set_status("sudo disponível — limpezas de sistema activadas", "info")
+        else:
+            self.set_status("⚠️  Sem sudo — algumas limpezas requerem privilégios", "warning")
+
+        # Verificar actualizações em background após 3 segundos
+        self.after(3000, self._check_updates_background)
+
+    # ── Layout ──────────────────────────────────────────────────
+
+    def _check_updates_background(self):
+        """Verifica actualizações em background sem bloquear a UI."""
+        def on_result(latest, notes):
+            if latest:
+                self.after(0, lambda: self._show_update_dialog(latest, notes))
+        threading.Thread(
+            target=check_for_updates,
+            args=(APP_VERSION, on_result),
+            daemon=True
+        ).start()
+
+    def _show_update_dialog(self, latest_version, release_notes):
+        """Mostra diálogo de actualização disponível."""
+        import webbrowser
+
+        win = tk.Toplevel(self)
+        win.title("Actualização Disponível — HCMaint")
+        win.configure(bg=BG_MAIN)
+        win.geometry("500x360")
+        win.resizable(False, False)
+        win.transient(self)
+        win.grab_set()
+
+        # Barra accent no topo
+        tk.Frame(win, bg=ACCENT, height=5).pack(fill=tk.X)
+
+        body = tk.Frame(win, bg=BG_MAIN)
+        body.pack(fill=tk.BOTH, expand=True, padx=24, pady=16)
+
+        # Ícone + título
+        title_f = tk.Frame(body, bg=BG_MAIN)
+        title_f.pack(fill=tk.X, pady=(0, 12))
+        tk.Label(title_f, text="🎉", font=("Segoe UI Emoji", 26),
+                 bg=BG_MAIN).pack(side=tk.LEFT, padx=(0, 12))
+        col = tk.Frame(title_f, bg=BG_MAIN)
+        col.pack(side=tk.LEFT)
+        tk.Label(col, text="Nova versão disponível!",
+                 font=("Segoe UI", 14, "bold"),
+                 bg=BG_MAIN, fg=TEXT_PRI).pack(anchor=tk.W)
+        tk.Label(col,
+                 text=f"v{APP_VERSION}  →  v{latest_version}",
+                 font=("Segoe UI", 12),
+                 bg=BG_MAIN, fg=ACCENT).pack(anchor=tk.W)
+
+        tk.Frame(body, bg=DIVIDER, height=1).pack(fill=tk.X, pady=8)
+
+        # Notas da release
+        tk.Label(body, text="O que há de novo:",
+                 font=("Segoe UI", 9, "bold"),
+                 bg=BG_MAIN, fg=TEXT_SEC, anchor=tk.W).pack(fill=tk.X)
+
+        notes_box = tk.Text(body, bg=BG_CARD, fg=TEXT_PRI,
+                             font=("Segoe UI", 9), bd=0,
+                             wrap=tk.WORD, height=7,
+                             state=tk.NORMAL)
+        notes_box.pack(fill=tk.BOTH, expand=True, pady=6)
+        short = "\n".join(
+            l for l in (release_notes or "").splitlines()
+            if l.strip() and not l.startswith("#")
+        )[:500]
+        notes_box.insert(tk.END, short or "Consulte o GitHub para detalhes.")
+        notes_box.config(state=tk.DISABLED)
+
+        tk.Frame(body, bg=DIVIDER, height=1).pack(fill=tk.X, pady=8)
+
+        # Instruções de actualização
+        tk.Label(body,
+                 text="Para actualizar: descarrega o ZIP e substitui os ficheiros em ~/Programas/HCMaint/",
+                 font=("Segoe UI", 8), bg=BG_MAIN, fg=TEXT_MUT,
+                 wraplength=440, justify=tk.LEFT).pack(fill=tk.X, pady=(0, 8))
+
+        # Botões
+        btn_f = tk.Frame(body, bg=BG_MAIN)
+        btn_f.pack(fill=tk.X)
+
+        def do_download():
+            webbrowser.open(f"https://github.com/{GITHUB_REPO}/releases/latest")
+            win.destroy()
+
+        def do_later():
+            win.destroy()
+
+        create_button(btn_f, "⬇️  Ver Releases no GitHub", do_download, "primary").pack(side=tk.LEFT, padx=(0, 8))
+        create_button(btn_f, "Mais tarde", do_later, "secondary").pack(side=tk.LEFT)
+
+        tk.Label(body, text=f"Versão instalada: v{APP_VERSION}",
+                 font=("Segoe UI", 8), bg=BG_MAIN, fg=TEXT_MUT).pack(
+            side=tk.BOTTOM, anchor=tk.E, pady=(8, 0))
+
     def _build_layout(self):
-        sidebar = tk.Frame(self.main_container, bg=BG_SIDEBAR, width=168)
+        sidebar = tk.Frame(self.main_container, bg=BG_SIDEBAR, width=210)
         sidebar.pack(side=tk.LEFT, fill=tk.Y)
         sidebar.pack_propagate(False)
 
-        # Cabeçalho sidebar
-        hdr = tk.Frame(sidebar, bg=BG_TOPBAR, height=38)
+        hdr = tk.Frame(sidebar, bg=BG_TOPBAR, height=50)
         hdr.pack(fill=tk.X)
         hdr.pack_propagate(False)
-        tk.Label(hdr, text="HC-Cleaner",
-                 font=("Segoe UI", 10, "bold"),
-                 bg=BG_TOPBAR, fg=SUCCESS).pack(side=tk.LEFT, padx=12, pady=8)
+        tk.Label(hdr, text="🐧 HCMaint", font=("Segoe UI", 12, "bold"),
+                 bg=BG_TOPBAR, fg=ACCENT).pack(side=tk.LEFT, padx=14, pady=13)
 
-        tk.Frame(sidebar, bg=ACCENT_DRK, height=2).pack(fill=tk.X)
+        tk.Frame(sidebar, bg=DIVIDER, height=1).pack(fill=tk.X)
 
-        nav_items = [
-            ("⌂",  "Dashboard",  "dashboard"),
-            ("🧹", "Limpeza",    "cleaner"),
-            ("🔑", "Registo",    "registry"),
-            ("📦", "Programas",  "programs"),
-            ("🦠", "Malware",    "malware"),
-            ("ℹ️",  "Sobre",      "about"),
-        ]
-        for icon, label, key in nav_items:
-            btn = NavButton(sidebar, icon, label, lambda k=key: self._show_page(k))
+        for icon, label, key in [
+            ("🏠", "Dashboard",   "dashboard"),
+            ("🔍", "Análise",     "scan"),
+            ("🧹", "Limpeza",     "clean"),
+            ("🛠️", "Ferramentas", "tools"),
+            ("💾", "Espaço",      "disk"),
+        ]:
+            btn = NavBtn(sidebar, icon, label, lambda k=key: self._show(k))
             btn.pack(fill=tk.X)
-            self._nav_btns[key] = btn
+            self._nav[key] = btn
 
-        tk.Frame(sidebar, bg=DIVIDER, height=1).pack(fill=tk.X, pady=(6, 0))
-        tk.Label(sidebar, text="v1.4.9  •  HCsoftware",
+        tk.Frame(sidebar, bg=DIVIDER, height=1).pack(fill=tk.X, pady=(8, 0))
+        tk.Label(sidebar, text=f"v{APP_VERSION}  •  HCsoftware",
                  font=("Segoe UI", 7), bg=BG_SIDEBAR, fg=TEXT_MUT).pack(
-            side=tk.BOTTOM, pady=6)
+            side=tk.BOTTOM, pady=8)
 
         self._content = tk.Frame(self.main_container, bg=BG_MAIN)
         self._content.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        self._pages["dashboard"] = self._build_dashboard()
-        self._pages["cleaner"]   = self._build_cleaner()
-        self._pages["registry"]  = self._build_registry()
-        self._pages["programs"]  = self._build_programs()
-        self._pages["malware"]   = self._build_malware()
-        self._pages["about"]     = self._build_about()
+        self._pages["dashboard"] = self._pg_dashboard()
+        self._pages["scan"]      = self._pg_scan()
+        self._pages["clean"]     = self._pg_clean()
+        self._pages["tools"]     = self._pg_tools()
+        self._pages["disk"]      = self._pg_disk()
 
-    def _show_page(self, key):
-        if self._current_page:
-            self._pages[self._current_page].pack_forget()
-            self._nav_btns[self._current_page].set_active(False)
+    def _show(self, key):
+        if self._current:
+            self._pages[self._current].pack_forget()
+            self._nav[self._current].set_active(False)
         self._pages[key].pack(fill=tk.BOTH, expand=True)
-        self._nav_btns[key].set_active(True)
-        self._current_page = key
+        self._nav[key].set_active(True)
+        self._current = key
 
-    # ──────────── DASHBOARD ────────────
-    def _build_dashboard(self):
+    # ── Dashboard ───────────────────────────────────────────────
+
+    def _pg_dashboard(self):
         page = tk.Frame(self._content, bg=BG_MAIN)
 
         hdr = tk.Frame(page, bg=BG_MAIN)
-        hdr.pack(fill=tk.X, padx=16, pady=(10, 6))
-        tk.Label(hdr, text="Dashboard", font=("Segoe UI", 14, "bold"),
+        hdr.pack(fill=tk.X, padx=20, pady=(18, 6))
+        tk.Label(hdr, text="Dashboard", font=("Segoe UI", 18, "bold"),
                  bg=BG_MAIN, fg=TEXT_PRI).pack(side=tk.LEFT)
-        tk.Label(hdr, text=datetime.now().strftime("  %d/%m/%Y"),
-                 font=("Segoe UI", 9), bg=BG_MAIN, fg=TEXT_MUT).pack(side=tk.LEFT)
-        tk.Frame(page, bg=DIVIDER, height=1).pack(fill=tk.X, padx=16)
+        tk.Label(hdr, text=f"  {datetime.now().strftime('%d %B %Y')}",
+                 font=("Segoe UI", 11), bg=BG_MAIN, fg=TEXT_MUT).pack(side=tk.LEFT)
+        tk.Frame(page, bg=DIVIDER, height=1).pack(fill=tk.X, padx=20)
 
-        mid = tk.Frame(page, bg=BG_MAIN)
-        mid.pack(fill=tk.BOTH, expand=True, padx=14, pady=8)
+        # Cards de estado
+        cards_f = tk.Frame(page, bg=BG_MAIN)
+        cards_f.pack(fill=tk.X, padx=20, pady=14)
 
-        # ── ESQUERDA ──
-        left_col = tk.Frame(mid, bg=BG_MAIN, width=260)
-        left_col.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
-        left_col.pack_propagate(False)
+        self._dash_vals = {}
 
-        circle_card = create_card(left_col, title="PROGRESSO")
-        circle_card.pack(fill=tk.X, pady=(0, 6))
-
-        self._progress_canvas = tk.Canvas(
-            circle_card, width=160, height=160,
-            bg=BG_CARD, highlightthickness=0)
-        self._progress_canvas.pack(pady=8)
-        self._draw_progress_circle(0, "idle")
-
-        self._phase_lbl = tk.Label(circle_card,
-            text="Pronto para analisar",
-            font=("Segoe UI", 9, "bold"),
-            bg=BG_CARD, fg=ACCENT, wraplength=220, justify=tk.CENTER)
-        self._phase_lbl.pack(pady=(0, 2))
-
-        self._subphase_lbl = tk.Label(circle_card,
-            text="", font=("Segoe UI", 7),
-            bg=BG_CARD, fg=TEXT_MUT, wraplength=220, justify=tk.CENTER)
-        self._subphase_lbl.pack(pady=(0, 6))
-
-        phases_card = create_card(left_col, title="FASES")
-        phases_card.pack(fill=tk.X, pady=(0, 6))
-
-        self._phase_indicators = {}
-        for key, icon, label in [
-            ("clean",    "🧹", "Ficheiros"),
-            ("registry", "🔑", "Registo"),
-            ("malware",  "🦠", "Malware"),
-            ("programs", "📦", "Programas"),
-        ]:
-            row = tk.Frame(phases_card, bg=BG_CARD)
-            row.pack(fill=tk.X, padx=8, pady=2)
-            dot = tk.Label(row, text="⬤", font=("Segoe UI", 7), bg=BG_CARD, fg=TEXT_MUT)
-            dot.pack(side=tk.LEFT, padx=(0, 5))
-            tk.Label(row, text=f"{icon} {label}",
-                     font=("Segoe UI", 8), bg=BG_CARD, fg=TEXT_SEC).pack(side=tk.LEFT)
-            val_lbl = tk.Label(row, text="—", font=("Segoe UI", 8, "bold"),
-                               bg=BG_CARD, fg=TEXT_MUT, anchor=tk.E)
-            val_lbl.pack(side=tk.RIGHT)
-            self._phase_indicators[key] = {"dot": dot, "val": val_lbl}
-
-        btn_frame = tk.Frame(left_col, bg=BG_MAIN)
-        btn_frame.pack(fill=tk.X, pady=4)
-        create_button(btn_frame, "⚡ Análise Completa",
-                      self._run_full_analysis, "primary").pack(fill=tk.X, pady=(0, 4))
-        create_button(btn_frame, "🧹 Limpeza Rápida",
-                      self._quick_clean, "teal").pack(fill=tk.X)
-
-        # ── DIREITA ──
-        right_col = tk.Frame(mid, bg=BG_MAIN)
-        right_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-        cards_frame = tk.Frame(right_col, bg=BG_MAIN)
-        cards_frame.pack(fill=tk.X, pady=(0, 8))
-
-        self._dash_cards = {}
-        summary = [
-            ("🧹", "Limpeza",   "—", ACCENT,  "cleaner"),
-            ("🔑", "Registo",   "—", WARNING, "registry"),
-            ("🦠", "Ameaças",   "—", DANGER,  "malware"),
-            ("📦", "Programas", "—", SUCCESS, "programs"),
+        # (icon, title, init_text, color, click_action, tooltip)
+        card_defs = [
+            ("🗑️", "A Libertar",       "Clique em Analisar", WARNING,
+             self._quick_scan,
+             "Clique para iniciar análise completa"),
+            ("📦", "APT Cache",         "—", ACCENT,
+             lambda: [self._show("clean"), None],
+             "Clique para ir para Limpeza → APT Clean"),
+            ("📋", "Logs",              "—", INFO,
+             lambda: [self._show("clean"), None],
+             "Clique para ir para Limpeza → Logs"),
+            ("🗃️", "Cache Utilizador", "—", SUCCESS,
+             lambda: [self._show("scan"), self._scan_tree.selection_set("user_cache") if self._scan_results else None],
+             "Clique para ir para Análise"),
         ]
-        for icon, title, subtitle, color, page_key in summary:
-            card = tk.Frame(cards_frame, bg=BG_CARD,
-                            highlightthickness=1, highlightbackground=BORDER,
-                            cursor="hand2")
-            card.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
-            lbl_icon  = tk.Label(card, text=icon, font=("Segoe UI Emoji", 18), bg=BG_CARD, fg=color)
-            lbl_icon.pack(pady=(10, 2))
-            lbl_val   = tk.Label(card, text=subtitle, font=("Segoe UI", 12, "bold"), bg=BG_CARD, fg=color)
-            lbl_val.pack()
-            lbl_title = tk.Label(card, text=title, font=("Segoe UI", 8), bg=BG_CARD, fg=TEXT_MUT)
+
+        for icon, title, init, color, action, tooltip in card_defs:
+            c = tk.Frame(cards_f, bg=BG_CARD, cursor="hand2",
+                         highlightthickness=1, highlightbackground=BORDER)
+            c.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5)
+
+            lbl_icon = tk.Label(c, text=icon, font=("Segoe UI Emoji", 20),
+                                bg=BG_CARD, fg=color)
+            lbl_icon.pack(pady=(12, 2))
+            v = tk.Label(c, text=init, font=("Segoe UI", 10, "bold"),
+                         bg=BG_CARD, fg=color)
+            v.pack()
+            lbl_title = tk.Label(c, text=title, font=("Segoe UI", 8),
+                                 bg=BG_CARD, fg=TEXT_MUT)
             lbl_title.pack()
-            lbl_hint  = tk.Label(card, text="clique para abrir →", font=("Segoe UI", 7), bg=BG_CARD, fg=TEXT_MUT)
-            lbl_hint.pack(pady=(0, 8))
+            lbl_tip = tk.Label(c, text=tooltip, font=("Segoe UI", 7),
+                               bg=BG_CARD, fg=TEXT_MUT, pady=0)
+            lbl_tip.pack(pady=(0, 10))
 
-            def _make_handlers(pk, c, lh):
-                def on_enter(e):
-                    c.configure(highlightbackground=ACCENT, highlightthickness=2)
-                    lh.configure(fg=ACCENT)
-                def on_leave(e):
-                    c.configure(highlightbackground=BORDER, highlightthickness=1)
-                    lh.configure(fg=TEXT_MUT)
-                def on_click(e): self._show_page(pk)
-                return on_enter, on_leave, on_click
+            # Hover + click em todos os widgets do card
+            BG_HOV = "#555555"
+            def _enter(e, frame=c, children=(lbl_icon, v, lbl_title, lbl_tip)):
+                frame.configure(bg=BG_HOV, highlightbackground=ACCENT)
+                for w in children:
+                    w.configure(bg=BG_HOV)
+            def _leave(e, frame=c, children=(lbl_icon, v, lbl_title, lbl_tip)):
+                frame.configure(bg=BG_CARD, highlightbackground=BORDER)
+                for w in children:
+                    w.configure(bg=BG_CARD)
 
-            on_enter, on_leave, on_click = _make_handlers(page_key, card, lbl_hint)
-            for w in [card, lbl_icon, lbl_val, lbl_title, lbl_hint]:
-                w.bind("<Enter>",    on_enter)
-                w.bind("<Leave>",    on_leave)
-                w.bind("<Button-1>", on_click)
-            self._dash_cards[title] = lbl_val
+            for w in (c, lbl_icon, v, lbl_title, lbl_tip):
+                w.bind("<Enter>", _enter)
+                w.bind("<Leave>", _leave)
+                w.bind("<Button-1>", lambda e, a=action: a())
 
-        log_card = create_card(right_col, title="ACTIVIDADE")
-        log_card.pack(fill=tk.BOTH, expand=True)
-        lf, lt = setup_log_area(log_card)
+            self._dash_vals[title] = v
+
+        # Botões rápidos
+        bf = tk.Frame(page, bg=BG_MAIN)
+        bf.pack(pady=6)
+        create_button(bf, "⚡  Análise Rápida", self._quick_scan, "primary").pack(side=tk.LEFT, padx=5)
+        create_button(bf, "✨  Limpeza Segura", self._safe_clean, "teal").pack(side=tk.LEFT, padx=5)
+        create_button(bf, "💾  Análise de Espaço", lambda: [self._show("disk"), self._run_disk()], "olive").pack(side=tk.LEFT, padx=5)
+
+        # Log
+        lc = create_card(page, title="ACTIVIDADE")
+        lc.pack(fill=tk.BOTH, expand=True, padx=20, pady=(6, 14))
+        lf, lt = setup_log_area(lc)
         lf.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
         self._dash_log = lt
 
-        self._anim_angle   = 0
-        self._anim_job     = None
-        self._analysis_pct = 0
+        # Progressbar
+        self._dash_pb = ttk.Progressbar(page, style="HC.Horizontal.TProgressbar", mode="determinate")
+        self._dash_pb.pack(fill=tk.X, padx=20, pady=(0, 6))
 
         return page
 
-    # ── Círculo de progresso ──
-    def _draw_progress_circle(self, pct, state="idle"):
-        import math
-        c = self._progress_canvas
-        c.delete("all")
-        cx, cy, r_out, r_in = 80, 80, 68, 50
-
-        ring_color, text_color = {
-            "idle":    (BG_PANEL, TEXT_MUT),
-            "running": (ACCENT,   TEXT_PRI),
-            "done":    (SUCCESS,  SUCCESS),
-            "error":   (DANGER,   DANGER),
-        }.get(state, (BG_PANEL, TEXT_MUT))
-
-        c.create_oval(cx-r_out, cy-r_out, cx+r_out, cy+r_out,
-                      outline=BG_PANEL, width=14, fill=BG_CARD)
-        if pct > 0:
-            c.create_arc(cx-r_out, cy-r_out, cx+r_out, cy+r_out,
-                         start=90, extent=-min(359.9, pct*3.6),
-                         outline=ring_color, width=14, style="arc")
-        c.create_oval(cx-r_in, cy-r_in, cx+r_in, cy+r_in, fill=BG_CARD, outline=BG_CARD)
-
-        if state == "done":
-            c.create_text(cx, cy-8,  text="✓", font=("Segoe UI", 22, "bold"), fill=SUCCESS, anchor=tk.CENTER)
-            c.create_text(cx, cy+16, text="Concluído", font=("Segoe UI", 8),  fill=SUCCESS, anchor=tk.CENTER)
-        elif state == "idle":
-            c.create_text(cx, cy-6,  text="🛡️", font=("Segoe UI Emoji", 20), fill=TEXT_MUT, anchor=tk.CENTER)
-            c.create_text(cx, cy+18, text="Pronto",    font=("Segoe UI", 8),  fill=TEXT_MUT, anchor=tk.CENTER)
-        else:
-            c.create_text(cx, cy-8, text=f"{int(pct)}%", font=("Segoe UI", 14, "bold"),
-                          fill=text_color, anchor=tk.CENTER)
-            angle_rad = math.radians(self._anim_angle)
-            sx = cx + r_out * math.cos(angle_rad)
-            sy = cy - r_out * math.sin(angle_rad)
-            c.create_oval(sx-4, sy-4, sx+4, sy+4, fill="white", outline="")
-
-    def _animate_circle(self):
-        if self._anim_job is None: return
-        self._anim_angle = (self._anim_angle - 6) % 360
-        self._draw_progress_circle(self._analysis_pct, "running")
-        self._anim_job = self.after(50, self._animate_circle)
-
-    def _start_circle_animation(self):
-        self._anim_angle = 0; self._analysis_pct = 0
-        if self._anim_job: self.after_cancel(self._anim_job)
-        self._anim_job = self.after(50, self._animate_circle)
-
-    def _stop_circle_animation(self, state="done"):
-        if self._anim_job: self.after_cancel(self._anim_job); self._anim_job = None
-        self._draw_progress_circle(100 if state == "done" else self._analysis_pct, state)
-
-    def _set_phase(self, phase_key, pct, label, sublabel="", value=None, value_color=None):
-        self._analysis_pct = pct
-        self.after(0, lambda: self._phase_lbl.config(text=label))
-        self.after(0, lambda: self._subphase_lbl.config(text=sublabel))
-        if phase_key and phase_key in self._phase_indicators:
-            ind = self._phase_indicators[phase_key]
-            if value is not None:
-                co = value_color or SUCCESS
-                self.after(0, lambda i=ind, v=value, c=co: (
-                    i["dot"].config(fg=c), i["val"].config(text=v, fg=c)))
-            else:
-                self.after(0, lambda i=ind: (
-                    i["dot"].config(fg=ACCENT), i["val"].config(text="...", fg=ACCENT)))
-
-    def _log_dash(self, msg, tag="recv"):
+    def _dlog(self, msg, tag="recv"):
         self._dash_log.config(state=tk.NORMAL)
         ts = datetime.now().strftime("%H:%M:%S")
-        self._dash_log.insert(tk.END, f"[{ts}] {msg}\n", tag)
+        self._dash_log.insert(tk.END, f"[{ts}]  {msg}\n", tag)
         self._dash_log.see(tk.END)
         self._dash_log.config(state=tk.DISABLED)
 
-    def _run_full_analysis(self):
-        self._log_dash("▶  Análise completa iniciada...", "info")
-        for ind in self._phase_indicators.values():
-            ind["dot"].config(fg=TEXT_MUT); ind["val"].config(text="—", fg=TEXT_MUT)
-        self._start_circle_animation()
-        threading.Thread(target=self._full_analysis_worker, daemon=True).start()
+    def _quick_scan(self):
+        self._dash_pb["value"] = 0
+        self._dlog("▶  Análise iniciada...", "info")
+        threading.Thread(target=self._quick_scan_worker, daemon=True).start()
 
-    def _full_analysis_worker(self):
-        # 1. Ficheiros
-        self._set_phase("clean", 2, "A analisar ficheiros...", "Temporários, cache, logs")
-        self.after(0, lambda: self._log_dash("🧹 A analisar ficheiros...", "info"))
-        def prog_clean(i, total, msg):
-            self._analysis_pct = (i / max(total, 1)) * 25
-            short = msg[:55] + "..." if len(msg) > 55 else msg
-            self.after(0, lambda m=short: self._subphase_lbl.config(text=m))
-            self.after(0, lambda m=msg: self._log_dash(f"   {m}", "muted"))
-        self._cleaner_results = scan_all(progress_callback=prog_clean)
-        total_size = sum(r["size"] for r in self._cleaner_results.values())
-        self._set_phase("clean", 25, "Ficheiros concluído", value=format_size(total_size), value_color=ACCENT)
-        self.after(0, lambda: self._log_dash(f"✅ Ficheiros: {format_size(total_size)} encontrados", "ok"))
-        self.after(0, lambda: self._dash_cards["Limpeza"].config(text=format_size(total_size)))
+    def _quick_scan_worker(self):
+        def prog(i, total, msg):
+            pct = i / total * 100 if total else 0
+            self.after(0, lambda: self._dash_pb.__setitem__("value", pct))
+            if msg:
+                self.after(0, lambda m=msg: self._dlog(f"   {m}", "muted"))
 
-        # 2. Registo
-        self._set_phase("registry", 26, "A analisar registo...", "Chaves inválidas, orphans")
-        self.after(0, lambda: self._log_dash("🔑 A analisar registo...", "info"))
-        def prog_reg(i, total, msg):
-            self._analysis_pct = 25 + (i / max(total, 1)) * 25
-            short = msg[:55] + "..." if len(msg) > 55 else msg
-            self.after(0, lambda m=short: self._subphase_lbl.config(text=m))
-        self._registry_issues = scan_all_registry(progress_callback=prog_reg)
-        n_reg = len(self._registry_issues)
-        self._set_phase("registry", 50, "Registo concluído",
-                        value=f"{n_reg} problemas", value_color=WARNING if n_reg > 0 else SUCCESS)
-        self.after(0, lambda: self._log_dash(f"✅ Registo: {n_reg} problemas encontrados", "ok"))
-        self.after(0, lambda: self._dash_cards["Registo"].config(
-            text=f"{n_reg} {'problema' if n_reg == 1 else 'problemas'}"))
+        self._scan_results = scan_all(progress_cb=prog)
+        total_size = sum(r["size"] for r in self._scan_results)
 
-        # 3. Malware
-        self._set_phase("malware", 51, "A verificar ameaças...", "Executáveis suspeitos, autorun, hosts")
-        self.after(0, lambda: self._log_dash("🦠 A verificar ameaças...", "warn"))
-        from modules.malware import (
-            scan_temp_executables, scan_autorun_entries, scan_winlogon,
-            scan_running_processes, scan_hosts_file,
-            TIMEOUT_TEMP, TIMEOUT_AUTORUN, TIMEOUT_WINLOGON,
-            TIMEOUT_PROCESSES, TIMEOUT_HOSTS, _run_with_timeout,
-        )
-        mal_phase_steps = [
-            ("Executáveis em temporários...", scan_temp_executables,  TIMEOUT_TEMP + 2),
-            ("Entradas de arranque...",        scan_autorun_entries,   TIMEOUT_AUTORUN + 2),
-            ("Winlogon Shell/Userinit...",     scan_winlogon,          TIMEOUT_WINLOGON + 2),
-            ("Processos suspeitos...",         scan_running_processes, TIMEOUT_PROCESSES + 3),
-            ("Ficheiro hosts...",              scan_hosts_file,        TIMEOUT_HOSTS + 2),
-        ]
-        self._malware_findings = []
-        for idx, (step_msg, step_fn, step_timeout) in enumerate(mal_phase_steps):
-            self._analysis_pct = 51 + (idx / len(mal_phase_steps)) * 24
-            self.after(0, lambda m=step_msg: self._subphase_lbl.config(text=m))
-            self.after(0, lambda m=step_msg: self._log_dash(f"   {m}", "muted"))
-            result, err = _run_with_timeout(step_fn, step_timeout, default=[])
-            if result: self._malware_findings.extend(result)
-            if err:
-                self.after(0, lambda e=err, m=step_msg: self._log_dash(f"   ⚠️ {m} — {e}", "warn"))
-        n_mal = len(self._malware_findings)
-        color_mal = DANGER if n_mal > 0 else SUCCESS
-        self._set_phase("malware", 75, "Malware concluído",
-                        value=f"{n_mal} {'ameaça' if n_mal == 1 else 'ameaças'}", value_color=color_mal)
-        self.after(0, lambda: self._log_dash(
-            f"{'⚠️' if n_mal else '✅'} Malware: {n_mal} ameaças", "warn" if n_mal else "ok"))
-        self.after(0, lambda: self._dash_cards["Ameaças"].config(
-            text=f"{n_mal} {'ameaça' if n_mal == 1 else 'ameaças'}", fg=color_mal))
+        # Actualizar cards
+        apt = next((r for r in self._scan_results if r["key"] == "apt_cache"), None)
+        logs = next((r for r in self._scan_results if r["key"] == "journal_logs"), None)
+        cache = next((r for r in self._scan_results if r["key"] == "user_cache"), None)
 
-        # 4. Programas
-        self._set_phase("programs", 76, "A listar programas instalados...", "")
-        self.after(0, lambda: self._log_dash("📦 A listar programas...", "info"))
-        self._programs_list = get_installed_programs()
-        n_prog = len(self._programs_list)
-        self._set_phase("programs", 100, "Programas concluído",
-                        value=f"{n_prog} instalados", value_color=SUCCESS)
-        self.after(0, lambda: self._log_dash(f"✅ Programas: {n_prog} instalados", "ok"))
-        self.after(0, lambda: self._dash_cards["Programas"].config(text=f"{n_prog} instalados"))
+        self.after(0, lambda: self._dash_vals["A Libertar"].config(text=fmt(total_size)))
+        if apt:
+            self.after(0, lambda: self._dash_vals["APT Cache"].config(text=fmt(apt["size"])))
+        if logs:
+            self.after(0, lambda: self._dash_vals["Logs"].config(text=fmt(logs["size"])))
+        if cache:
+            self.after(0, lambda: self._dash_vals["Cache Utilizador"].config(text=fmt(cache["size"])))
 
-        # Concluído
-        self.after(0, lambda: self._stop_circle_animation("done"))
-        self.after(0, lambda: self._phase_lbl.config(text="✅  Análise completa concluída!", fg=SUCCESS))
-        self.after(0, lambda: self._subphase_lbl.config(text=""))
-        self.after(0, lambda: self._log_dash("─── Análise concluída ───", "ok"))
-        self.after(0, lambda: self.set_status("Análise completa concluída", "success"))
-        self.after(100, self._refresh_cleaner_results)
-        self.after(200, self._refresh_registry_results)
-        self.after(300, self._refresh_malware_results)
-        self.after(400, self._refresh_programs_list)
+        self.after(0, lambda: self._dlog(f"✅  Total detectado: {fmt(total_size)}", "ok"))
+        self.after(0, lambda: self._dash_pb.__setitem__("value", 100))
+        self.after(0, lambda: self.set_status(f"Análise concluída — {fmt(total_size)} a libertar", "success"))
+        self.after(0, self._refresh_scan_page)
 
-    def _quick_clean(self):
-        if not self._cleaner_results:
-            messagebox.showinfo("HC-Cleaner", "Execute primeiro uma Análise Completa.")
+    def _safe_clean(self):
+        """Limpa categorias 100% seguras sem pedir confirmação extra."""
+        if not self._scan_results:
+            messagebox.showinfo("HCMaint", "Execute primeiro uma Análise Rápida.")
             return
-        if messagebox.askyesno("Limpeza Rápida", "Limpar todos os ficheiros desnecessários encontrados?"):
-            threading.Thread(target=self._quick_clean_worker, daemon=True).start()
+        if messagebox.askyesno("Limpeza Segura",
+                                "Limpar automaticamente:\n"
+                                "• Cache APT\n• Logs journal > 30 dias\n"
+                                "• Miniaturas\n• Cache Python\n\n"
+                                "Estas operações são reversíveis ou regeneráveis."):
+            threading.Thread(target=self._safe_clean_worker, daemon=True).start()
 
-    def _quick_clean_worker(self):
-        self.after(0, lambda: self._phase_lbl.config(text="🧹  A limpar ficheiros...", fg=ACCENT))
-        self.after(0, lambda: self._start_circle_animation())
-        total_cleaned = 0; total_failed = 0
-        all_items = [item for r in self._cleaner_results.values() for item in r.get("items", [])]
-        for i, item in enumerate(all_items):
-            self._analysis_pct = (i / max(len(all_items), 1)) * 100
-            ok, _ = clean_item(item)
-            if ok: total_cleaned += item["size"]
-            else:  total_failed  += 1
-        for key in self._cleaner_results:
-            self._cleaner_results[key]["items"] = []; self._cleaner_results[key]["size"] = 0
-        self.after(0, lambda: self._stop_circle_animation("done"))
-        self.after(0, lambda: self._phase_lbl.config(text=f"✅  Limpo: {format_size(total_cleaned)}", fg=SUCCESS))
-        self.after(0, lambda: self._subphase_lbl.config(text=""))
-        self.after(0, lambda: self._log_dash(
-            f"🧹 Limpeza rápida: {format_size(total_cleaned)} libertados, {total_failed} erros", "ok"))
-        self.after(0, lambda: self.set_status(f"Limpeza concluída: {format_size(total_cleaned)} libertados", "success"))
-        self.after(0, lambda: self._dash_cards["Limpeza"].config(text="Limpo ✓"))
-        self.after(0, self._refresh_cleaner_results)
-        self.after(0, lambda: self._file_tree.delete(*self._file_tree.get_children()))
-        self.after(0, lambda: self._clean_total_lbl.config(text="Total detectado:  0 B"))
-        self.after(0, lambda: self._clean_progress.__setitem__("value", 0))
+    def _safe_clean_worker(self):
+        freed = 0
 
-    # ──────────── CLEANER PAGE ────────────
-    def _build_cleaner(self):
+        def log(msg, tag="recv"):
+            self.after(0, lambda m=msg, t=tag: self._dlog(m, t))
+
+        log("🧹  Limpeza segura iniciada...", "info")
+
+        ok, msg = clean_apt_cache(log_cb=log)
+        if ok:
+            r = next((r for r in self._scan_results if r["key"] == "apt_cache"), None)
+            if r:
+                freed += r["size"]
+
+        ok, msg = clean_journal_logs(30, log_cb=log)
+
+        ok, msg = clean_thumbnails(log_cb=log)
+        if ok:
+            r = next((r for r in self._scan_results if r["key"] == "thumbnails"), None)
+            if r:
+                freed += r["size"]
+
+        py = next((r for r in self._scan_results if r["key"] == "python_cache"), None)
+        if py:
+            clean_python_cache(py.get("files_list", []), log_cb=log)
+            freed += py["size"]
+
+        log(f"─── Limpeza segura concluída — ~{fmt(freed)} libertados ───", "info")
+        self.after(0, lambda: self.set_status(f"Limpeza segura concluída (~{fmt(freed)} libertados)", "success"))
+
+    # ── Página Análise ──────────────────────────────────────────
+
+    def _pg_scan(self):
         page = tk.Frame(self._content, bg=BG_MAIN)
+
         hdr = tk.Frame(page, bg=BG_MAIN)
-        hdr.pack(fill=tk.X, padx=14, pady=(10, 6))
-        tk.Label(hdr, text="🧹  Limpeza de Ficheiros", font=("Segoe UI", 13, "bold"),
+        hdr.pack(fill=tk.X, padx=20, pady=(16, 6))
+        tk.Label(hdr, text="🔍  Análise do Sistema", font=("Segoe UI", 16, "bold"),
                  bg=BG_MAIN, fg=TEXT_PRI).pack(side=tk.LEFT)
-        btn_f = tk.Frame(hdr, bg=BG_MAIN)
-        btn_f.pack(side=tk.RIGHT)
-        create_button(btn_f, "🔍 Analisar",          self._scan_cleaner,   "teal"   ).pack(side=tk.LEFT, padx=4)
-        create_button(btn_f, "🗑️ Limpar Selecionado", self._clean_selected, "primary").pack(side=tk.LEFT, padx=4)
-        create_button(btn_f, "✨ Limpar Tudo",        self._clean_all,      "warning").pack(side=tk.LEFT, padx=4)
-        tk.Frame(page, bg=DIVIDER, height=1).pack(fill=tk.X, padx=14, pady=3)
+        bf = tk.Frame(hdr, bg=BG_MAIN)
+        bf.pack(side=tk.RIGHT)
+        create_button(bf, "🔍 Analisar", self._run_scan, "teal").pack(side=tk.LEFT, padx=4)
+        create_button(bf, "🧹 Limpar Seleccionado", self._clean_selected_scan, "primary").pack(side=tk.LEFT, padx=4)
 
-        # Barra de aviso de browsers abertos
-        self._browser_warn_bar = tk.Frame(page, bg="#5a1a00")
-        self._browser_warn_lbl = tk.Label(
-            self._browser_warn_bar,
-            text="",
-            font=("Segoe UI", 9, "bold"),
-            bg="#5a1a00", fg="#ffaa44",
-            pady=4, padx=12, anchor=tk.W
-        )
-        self._browser_warn_lbl.pack(fill=tk.X)
-        self._update_browser_warning()
+        tk.Frame(page, bg=DIVIDER, height=1).pack(fill=tk.X, padx=20, pady=4)
 
-        self._clean_progress = ttk.Progressbar(page, style="HC.Horizontal.TProgressbar", mode="determinate")
-        self._clean_progress.pack(fill=tk.X, padx=14, pady=(3, 6))
-        split = tk.Frame(page, bg=BG_MAIN)
-        split.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 10))
+        self._scan_pb = ttk.Progressbar(page, style="HC.Horizontal.TProgressbar", mode="determinate")
+        self._scan_pb.pack(fill=tk.X, padx=20, pady=(4, 8))
 
-        left = create_card(split, title="CATEGORIAS")
-        left.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 8))
-        left.configure(width=280); left.pack_propagate(False)
-        self._cat_tree = ttk.Treeview(left, style="HC.Treeview",
-                                       columns=("size",), show="tree headings", selectmode="browse")
-        self._cat_tree.heading("#0", text="Categoria")
-        self._cat_tree.heading("size", text="Tamanho")
-        self._cat_tree.column("#0", width=180)
-        self._cat_tree.column("size", width=80, anchor=tk.E)
-        self._cat_tree.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
-        self._cat_tree.bind("<<TreeviewSelect>>", self._on_cat_select)
+        # PanedWindow — divisão ajustável pelo utilizador
+        paned = tk.PanedWindow(page, orient=tk.HORIZONTAL,
+                               bg=BG_SIDEBAR, sashwidth=5,
+                               sashrelief=tk.FLAT, bd=0)
+        paned.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 0))
 
-        right = create_card(split, title="FICHEIROS ENCONTRADOS")
-        right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self._file_tree = ttk.Treeview(right, style="HC.Treeview",
-                                        columns=("path", "size", "type"),
-                                        show="headings", selectmode="extended")
-        self._file_tree.heading("path", text="Caminho")
-        self._file_tree.heading("size", text="Tamanho")
-        self._file_tree.heading("type", text="Tipo")
-        self._file_tree.column("path", width=400)
-        self._file_tree.column("size", width=90, anchor=tk.E)
-        self._file_tree.column("type", width=70, anchor=tk.CENTER)
-        sb = ttk.Scrollbar(right, style="HC.Vertical.TScrollbar", command=self._file_tree.yview)
+        # ── Esquerda: lista de categorias ──────────────────────
+        left_outer = tk.Frame(paned, bg=BG_MAIN)
+        paned.add(left_outer, minsize=360, width=430)
+
+        left = create_card(left_outer, title="CATEGORIAS DETECTADAS")
+        left.pack(fill=tk.BOTH, expand=True)
+
+        self._scan_tree = ttk.Treeview(left, style="HC.Treeview",
+                                        columns=("size", "count"), show="tree headings",
+                                        selectmode="browse")
+        self._scan_tree.heading("#0", text="Categoria")
+        self._scan_tree.heading("size", text="Tamanho")
+        self._scan_tree.heading("count", text="Items")
+        self._scan_tree.column("#0", width=240, stretch=True)
+        self._scan_tree.column("size", width=100, anchor=tk.E, stretch=False)
+        self._scan_tree.column("count", width=60, anchor=tk.CENTER, stretch=False)
+        sb = ttk.Scrollbar(left, style="HC.Vertical.TScrollbar", command=self._scan_tree.yview)
         sb.pack(side=tk.RIGHT, fill=tk.Y)
-        self._file_tree.configure(yscrollcommand=sb.set)
-        self._file_tree.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+        self._scan_tree.configure(yscrollcommand=sb.set)
+        self._scan_tree.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+        self._scan_tree.bind("<<TreeviewSelect>>", self._on_scan_select)
 
-        self._clean_total_lbl = tk.Label(page, text="Total: —",
-                                          font=("Segoe UI", 10, "bold"),
-                                          bg=BG_MAIN, fg=ACCENT, anchor=tk.E)
-        self._clean_total_lbl.pack(fill=tk.X, padx=24, pady=(0, 4))
+        # Total no fundo da lista
+        self._scan_total_lbl = tk.Label(left_outer, text="",
+                                         font=("Segoe UI", 9, "bold"),
+                                         bg=BG_TOPBAR, fg=ACCENT, anchor=tk.E, padx=10, pady=4)
+        self._scan_total_lbl.pack(fill=tk.X)
+
+        # ── Direita: painel de detalhes estruturado ────────────
+        right_outer = tk.Frame(paned, bg=BG_MAIN)
+        paned.add(right_outer, minsize=280)
+
+        right = create_card(right_outer, title="DETALHES DA CATEGORIA")
+        right.pack(fill=tk.BOTH, expand=True)
+
+        # Cabeçalho de detalhe com ícone + nome + tamanho
+        self._det_header = tk.Frame(right, bg=BG_PANEL)
+        self._det_header.pack(fill=tk.X, padx=8, pady=(8, 0))
+
+        self._det_icon_lbl = tk.Label(self._det_header, text="",
+                                       font=("Segoe UI Emoji", 24),
+                                       bg=BG_PANEL, fg=ACCENT)
+        self._det_icon_lbl.pack(side=tk.LEFT, padx=(8, 6), pady=6)
+
+        det_title_col = tk.Frame(self._det_header, bg=BG_PANEL)
+        det_title_col.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self._det_name_lbl = tk.Label(det_title_col, text="Seleccione uma categoria",
+                                       font=("Segoe UI", 11, "bold"),
+                                       bg=BG_PANEL, fg=TEXT_PRI, anchor=tk.W)
+        self._det_name_lbl.pack(fill=tk.X)
+        self._det_sub_lbl = tk.Label(det_title_col, text="",
+                                      font=("Segoe UI", 9),
+                                      bg=BG_PANEL, fg=TEXT_MUT, anchor=tk.W)
+        self._det_sub_lbl.pack(fill=tk.X)
+
+        self._det_size_lbl = tk.Label(self._det_header, text="",
+                                       font=("Segoe UI", 18, "bold"),
+                                       bg=BG_PANEL, fg=YELLOW, padx=12)
+        self._det_size_lbl.pack(side=tk.RIGHT)
+
+        tk.Frame(right, bg=DIVIDER, height=1).pack(fill=tk.X, padx=8, pady=(6, 0))
+
+        # Grid de propriedades
+        props_f = tk.Frame(right, bg=BG_CARD)
+        props_f.pack(fill=tk.X, padx=8, pady=6)
+
+        def prop_row(parent, label, var_label, color=TEXT_PRI):
+            row = tk.Frame(parent, bg=BG_CARD)
+            row.pack(fill=tk.X, padx=6, pady=2)
+            tk.Label(row, text=label, font=("Segoe UI", 9),
+                     bg=BG_CARD, fg=TEXT_MUT, width=14, anchor=tk.W).pack(side=tk.LEFT)
+            lbl = tk.Label(row, text="—", font=("Segoe UI", 9, "bold"),
+                           bg=BG_CARD, fg=color, anchor=tk.W)
+            lbl.pack(side=tk.LEFT, fill=tk.X, expand=True)
+            return lbl
+
+        self._det_items_lbl  = prop_row(props_f, "Itens:",      "—")
+        self._det_sudo_lbl   = prop_row(props_f, "Requer sudo:", "—", WARNING)
+        self._det_safe_lbl   = prop_row(props_f, "Segurança:",  "—", SUCCESS)
+        self._det_paths_lbl  = prop_row(props_f, "Caminho:",    "—", INFO)
+
+        tk.Frame(right, bg=DIVIDER, height=1).pack(fill=tk.X, padx=8, pady=(2, 4))
+
+        # Barra de limpeza rápida
+        det_btn_f = tk.Frame(right, bg=BG_CARD)
+        det_btn_f.pack(fill=tk.X, padx=8, pady=(0, 6))
+        create_button(det_btn_f, "🧹  Limpar Esta Categoria",
+                      self._clean_selected_scan, "primary").pack(side=tk.LEFT, padx=4)
+
+        # Área de texto para pacotes/ficheiros
+        detail_lbl = tk.Frame(right, bg=BG_TOPBAR)
+        detail_lbl.pack(fill=tk.X, padx=8)
+        tk.Label(detail_lbl, text="CONTEÚDO", font=("Segoe UI", 8, "bold"),
+                 bg=BG_TOPBAR, fg=TEXT_MUT, padx=6, pady=4).pack(side=tk.LEFT)
+        tk.Frame(right, bg=DIVIDER, height=1).pack(fill=tk.X, padx=8)
+
+        self._detail_text = tk.Text(right, bg=LOG_BG, fg=TEXT_PRI,
+                                     font=("Consolas", 9), bd=0,
+                                     wrap=tk.WORD, state=tk.DISABLED)
+        sb2 = ttk.Scrollbar(right, style="HC.Vertical.TScrollbar", command=self._detail_text.yview)
+        sb2.pack(side=tk.RIGHT, fill=tk.Y, padx=(0,4), pady=4)
+        self._detail_text.configure(yscrollcommand=sb2.set)
+        self._detail_text.pack(fill=tk.BOTH, expand=True, padx=(8,0), pady=(0,8))
+        self._detail_text.tag_config("header", foreground=ACCENT, font=("Consolas", 9, "bold"))
+        self._detail_text.tag_config("ok",   foreground=SUCCESS)
+        self._detail_text.tag_config("warn", foreground=WARNING)
+        self._detail_text.tag_config("dim",  foreground=TEXT_MUT)
+        self._detail_text.tag_config("size", foreground=YELLOW)
+
         return page
 
-    def _update_browser_warning(self):
-        """Actualiza a barra de aviso de browsers a cada 3 segundos."""
-        try:
-            running = get_running_browsers_names()
-            if running:
-                names = ", ".join(running)
-                self._browser_warn_lbl.config(
-                    text=f"\u26a0\ufe0f  BROWSERS ABERTOS: {names}  \u2014  Feche-os antes de limpar temporários e cache!"
-                )
-                self._browser_warn_bar.pack(fill=tk.X, padx=14, pady=(0, 4))
-            else:
-                self._browser_warn_bar.pack_forget()
-        except Exception:
-            pass
-        # Reagendar a cada 3 segundos
-        self.after(3000, self._update_browser_warning)
+    def _run_scan(self):
+        self._scan_tree.delete(*self._scan_tree.get_children())
+        self._scan_pb["value"] = 0
+        self.set_status("A analisar sistema...", "info")
+        threading.Thread(target=self._run_scan_worker, daemon=True).start()
 
-    def _scan_cleaner(self):
-        self._cat_tree.delete(*self._cat_tree.get_children())
-        self._file_tree.delete(*self._file_tree.get_children())
-        self._clean_progress["value"] = 0
-        self.set_status("A analisar ficheiros...", "info")
-        threading.Thread(target=self._scan_cleaner_worker, daemon=True).start()
-
-    def _scan_cleaner_worker(self):
+    def _run_scan_worker(self):
         def prog(i, total, msg):
-            self.after(0, lambda: self._clean_progress.__setitem__("value", i/max(total,1)*100))
-            self.after(0, lambda m=msg: self.set_status(m, "info"))
-        self._cleaner_results = scan_all(progress_callback=prog)
-        self.after(0, self._refresh_cleaner_results)
+            pct = i / total * 100 if total else 0
+            self.after(0, lambda: self._scan_pb.__setitem__("value", pct))
+            if msg:
+                self.after(0, lambda m=msg: self.set_status(m, "info"))
 
-    def _refresh_cleaner_results(self):
-        self._cat_tree.delete(*self._cat_tree.get_children())
+        self._scan_results = scan_all(progress_cb=prog)
+        self.after(0, self._refresh_scan_page)
+
+    def _refresh_scan_page(self):
+        self._scan_tree.delete(*self._scan_tree.get_children())
         total = 0
-        for key, result in self._cleaner_results.items():
-            cat  = CLEAN_TARGETS.get(key, {})
-            size = result["size"]; total += size
-            self._cat_tree.insert("", tk.END, iid=key,
-                                  text=f"  {cat.get('icon','📁')}  {result['label']}",
-                                  values=(format_size(size),),
-                                  tags=("found",) if size > 0 else ())
-        self._cat_tree.tag_configure("found", foreground=WARNING)
-        self._clean_total_lbl.config(text=f"Total detectado:  {format_size(total)}")
-        self._clean_progress["value"] = 100
-        self.set_status(f"Análise concluída: {format_size(total)} a limpar", "success")
+        for r in self._scan_results:
+            size = r["size"]
+            total += size
+            tag = "found" if size > 0 else "empty"
+            self._scan_tree.insert("", tk.END, iid=r["key"],
+                                    text=f"  {r['icon']}  {r['label']}",
+                                    values=(fmt(size), r.get("count", 0) or ""),
+                                    tags=(tag,))
+        self._scan_tree.tag_configure("found", foreground=WARNING)
+        self._scan_tree.tag_configure("empty", foreground=TEXT_MUT)
+        self._scan_total_lbl.config(text=f"Total detectado:  {fmt(total)}")
+        self._scan_pb["value"] = 100
+        self.set_status(f"Análise concluída — {fmt(total)} a libertar", "success")
 
-    def _on_cat_select(self, e=None):
-        sel = self._cat_tree.selection()
-        if not sel: return
-        result = self._cleaner_results.get(sel[0], {})
-        self._file_tree.delete(*self._file_tree.get_children())
-        for item in result.get("items", []):
-            short = item["path"]
-            if len(short) > 80: short = "..." + short[-77:]
-            ftype = "📁" if item.get("type") == "folder" else "📄"
-            self._file_tree.insert("", tk.END, values=(short, format_size(item["size"]), ftype))
-
-    def _check_browsers_and_warn(self, cat_key):
-        """Verifica browsers abertos antes de limpar. Retorna True se pode prosseguir."""
-        if not category_needs_browsers_closed(cat_key):
-            return True
-        running = get_running_browsers_names()
-        if not running:
-            return True
-        browsers_str = "\n".join(f"  \u2022 {b}" for b in running)
-        msg = (
-            f"\u26a0\ufe0f  BROWSERS EM EXECU\u00c7\u00c3O DETECTADOS\n\n"
-            f"Os seguintes browsers est\u00e3o abertos:\n{browsers_str}\n\n"
-            f"Limpar ficheiros tempor\u00e1rios com browsers abertos pode causar:\n"
-            f"  \u2022 Corrup\u00e7\u00e3o de dados e cache do browser\n"
-            f"  \u2022 Perda de sess\u00f5es e passwords guardadas\n"
-            f"  \u2022 Problemas em actualiza\u00e7\u00f5es do browser\n\n"
-            f"RECOMENDA\u00c7\u00c3O: Feche todos os browsers antes de continuar.\n\n"
-            f"Deseja continuar mesmo assim? (n\u00e3o recomendado)"
-        )
-        return messagebox.askyesno("\u26a0\ufe0f Aviso de Seguran\u00e7a", msg, icon="warning")
-
-    def _clean_selected(self):
-        sel = self._cat_tree.selection()
+    def _on_scan_select(self, e=None):
+        sel = self._scan_tree.selection()
         if not sel:
-            messagebox.showinfo("HC-Cleaner", "Selecione uma categoria primeiro."); return
-        key    = sel[0]
-        result = self._cleaner_results.get(key, {})
-        items  = result.get("items", [])
-        if not items:
-            messagebox.showinfo("HC-Cleaner", "Nenhum ficheiro nesta categoria."); return
-        # Verificar browsers antes de limpar categorias sensíveis
-        if not self._check_browsers_and_warn(key):
-            self.set_status("Limpeza cancelada — feche os browsers primeiro", "warning")
             return
-        if messagebox.askyesno("Limpar", f"Limpar {format_size(result['size'])} de '{result['label']}'?"):
-            threading.Thread(target=lambda: self._do_clean(items, key), daemon=True).start()
+        key = sel[0]
+        result = next((r for r in self._scan_results if r["key"] == key), None)
+        if not result:
+            return
+        self._selected_result = result
 
-    def _clean_all(self):
-        total = sum(r["size"] for r in self._cleaner_results.values())
-        if not total:
-            messagebox.showinfo("HC-Cleaner", "Execute primeiro 'Analisar'."); return
+        # ── Actualizar widgets de detalhe estruturado ──
+        needs_sudo = result.get("needs_sudo", False)
+        safe = result.get("safe", True)
+        size = result["size"]
+        count = result.get("count", 0)
 
-        # Verificar se há browsers abertos (limpeza geral inclui categorias sensíveis)
-        running = get_running_browsers_names()
-        if running:
-            browsers_str = ", ".join(running)
-            msg = (
-                f"\u26a0\ufe0f  BROWSERS ABERTOS DETECTADOS\n\n"
-                f"Est\u00e3o abertos: {browsers_str}\n\n"
-                f"A Limpeza Geral inclui ficheiros tempor\u00e1rios e cache\n"
-                f"que podem estar a ser usados pelos browsers.\n\n"
-                f"Feche todos os browsers antes de continuar para evitar\n"
-                f"corrup\u00e7\u00e3o de dados e problemas de actualiza\u00e7\u00e3o.\n\n"
-                f"Deseja continuar mesmo assim?"
-            )
-            if not messagebox.askyesno("\u26a0\ufe0f Aviso de Seguran\u00e7a", msg, icon="warning"):
-                self.set_status("Limpeza cancelada — feche os browsers primeiro", "warning")
+        self._det_icon_lbl.config(text=result.get("icon", "📁"))
+        self._det_name_lbl.config(text=result["label"])
+        self._det_sub_lbl.config(text=result.get("details", ""))
+        # Para journal, mostrar tamanho removível vs total
+        total_size = result.get("total_size", size)
+        if result.get("key") == "journal_logs" and total_size != size:
+            size_display = f"{fmt(size)} / {fmt(total_size)}"
+        else:
+            size_display = fmt(size) if size > 0 else "0 B"
+        self._det_size_lbl.config(
+            text=size_display,
+            fg=WARNING if size > 50*1024*1024 else (YELLOW if size > 0 else TEXT_MUT)
+        )
+        self._det_items_lbl.config(
+            text=f"{count} item(s)" if count else "—"
+        )
+        self._det_sudo_lbl.config(
+            text="Sim ⚠️" if needs_sudo else "Não ✅",
+            fg=WARNING if needs_sudo else SUCCESS
+        )
+        self._det_safe_lbl.config(
+            text="✅ Seguro" if safe else "⚠️  Verificar antes",
+            fg=SUCCESS if safe else WARNING
+        )
+        paths = result.get("paths", [])
+        path_str = paths[0] if paths else "—"
+        if len(path_str) > 45:
+            path_str = "…" + path_str[-43:]
+        self._det_paths_lbl.config(text=path_str, fg=INFO)
+
+        # ── Área de conteúdo (texto) ──
+        dt = self._detail_text
+        dt.config(state=tk.NORMAL)
+        dt.delete("1.0", tk.END)
+
+        # Subpastas ~/.cache/
+        subdirs = result.get("subdirs", [])
+        if subdirs:
+            dt.insert(tk.END, f"Subpastas de ~/.cache/  ({len(subdirs)} pastas)\n", "header")
+            dt.insert(tk.END, "─" * 40 + "\n", "dim")
+            for name, sz, path in subdirs:
+                bar_filled = int(sz / max(subdirs[0][1], 1) * 20) if subdirs[0][1] > 0 else 0
+                bar = "█" * bar_filled + "░" * (20 - bar_filled)
+                tag = "warn" if sz > 50*1024*1024 else "dim"
+                dt.insert(tk.END, f"  {fmt(sz):>9}  {bar}  {name}\n", tag)
+
+        # Pacotes órfãos
+        pkgs = result.get("packages", [])
+        if pkgs:
+            dt.insert(tk.END, f"Pacotes a remover  ({len(pkgs)})\n", "header")
+            dt.insert(tk.END, "─" * 40 + "\n", "dim")
+            # 3 colunas
+            cols = 3
+            for i in range(0, len(pkgs), cols):
+                row_pkgs = pkgs[i:i+cols]
+                dt.insert(tk.END, "  " + "  ".join(f"{p:<28}" for p in row_pkgs) + "\n", "dim")
+
+        # Ficheiros
+        files = result.get("files_list", [])
+        if files:
+            dt.insert(tk.END, f"Ficheiros detectados  ({len(files)})\n", "header")
+            dt.insert(tk.END, "─" * 40 + "\n", "dim")
+            for fp in files[:60]:
+                dt.insert(tk.END, f"  {fp}\n", "dim")
+            if len(files) > 60:
+                dt.insert(tk.END, f"  … e mais {len(files)-60} ficheiros\n", "dim")
+
+        # Flatpak runtimes
+        all_runtimes = result.get("all_runtimes", [])
+        unused_refs = result.get("unused_refs", [])
+        if all_runtimes:
+            dt.insert(tk.END, f"Runtimes instalados  ({len(all_runtimes)})\n", "header")
+            dt.insert(tk.END, "─" * 40 + "\n", "dim")
+            for rt in all_runtimes:
+                is_unused = any(rt["id"] in ur or ur in rt["id"] for ur in unused_refs)
+                tag = "warn" if is_unused else "dim"
+                marker = "⚠️ " if is_unused else "   "
+                dt.insert(tk.END, f"  {marker}{rt['size_str']:>8}  {rt['id']}\n", tag)
+            if unused_refs:
+                dt.insert(tk.END, f"\n⚠️  {len(unused_refs)} marcados para remoção\n", "warn")
+
+        # Snaps desactivados
+        snaps_detail = result.get("disabled_detail", [])
+        blocked_snaps = result.get("blocked_snaps", [])
+        snaps = result.get("disabled_snaps", [])
+
+        if snaps_detail:
+            dt.insert(tk.END, f"Versões removíveis  ({len(snaps_detail)})\n", "header")
+            dt.insert(tk.END, "─" * 40 + "\n", "dim")
+            for s in snaps_detail:
+                size_str = fmt(s.get("size", 0)) if s.get("size") else ""
+                dt.insert(tk.END, f"  🔩  {s['name']}  rev {s['rev']}  {size_str}\n", "warn")
+        elif snaps:
+            dt.insert(tk.END, f"Versões removíveis  ({len(snaps)})\n", "header")
+            dt.insert(tk.END, "─" * 40 + "\n", "dim")
+            for s in snaps:
+                dt.insert(tk.END, f"  🔩  {s}\n", "warn")
+
+        if blocked_snaps:
+            dt.insert(tk.END, f"\nSnaps de sistema (não removíveis)  ({len(blocked_snaps)})\n", "header")
+            dt.insert(tk.END, "─" * 40 + "\n", "dim")
+            for s in blocked_snaps:
+                size_str = fmt(s.get("size", 0)) if s.get("size") else ""
+                dt.insert(tk.END,
+                    f"  🔒  {s['name']}  rev {s['rev']}  {size_str}  — {s.get('reason','')}\n",
+                    "dim")
+
+        if not snaps_detail and not snaps and not blocked_snaps:
+            pass  # handled by generic fallback below
+
+        # Docker
+        stopped = result.get("stopped", [])
+        dangling = result.get("dangling", [])
+        if stopped or dangling:
+            if stopped:
+                dt.insert(tk.END, f"Containers parados  ({len(stopped)})\n", "header")
+                dt.insert(tk.END, "─" * 40 + "\n", "dim")
+                for c in stopped[:20]:
+                    dt.insert(tk.END, f"  🐳  {c}\n", "warn")
+            if dangling:
+                dt.insert(tk.END, f"\nImagens dangling  ({len(dangling)})\n", "header")
+                dt.insert(tk.END, "─" * 40 + "\n", "dim")
+                for img in dangling[:20]:
+                    dt.insert(tk.END, f"  📦  {img}\n", "dim")
+
+        # Nada para mostrar
+        if not any([subdirs, pkgs, files, snaps, stopped, dangling]):
+            if size == 0:
+                dt.insert(tk.END, "  Nada encontrado — categoria já limpa.\n", "ok")
+            else:
+                dt.insert(tk.END, f"  {fmt(size)} a libertar.\n", "size")
+                if paths:
+                    dt.insert(tk.END, "\nCaminhos:\n", "header")
+                    for p in paths[:5]:
+                        dt.insert(tk.END, f"  {p}\n", "dim")
+
+        dt.config(state=tk.DISABLED)
+
+    def _clean_selected_scan(self):
+        if not self._selected_result:
+            messagebox.showinfo("HCMaint", "Seleccione uma categoria na lista.")
+            return
+        r = self._selected_result
+        if r["size"] == 0:
+            messagebox.showinfo("HCMaint", "Nada para limpar nesta categoria.")
+            return
+        if not messagebox.askyesno("Confirmar Limpeza",
+                                    f"Limpar '{r['label']}'?\n\nTamanho: {fmt(r['size'])}"):
+            return
+        threading.Thread(target=lambda: self._do_clean_one(r), daemon=True).start()
+
+    def _do_clean_one(self, r):
+        def log(msg, tag="recv"):
+            self.after(0, lambda m=msg, t=tag: self._dlog(m, t))
+
+        key = r["key"]
+        self.after(0, lambda: self._show("dashboard"))
+
+        freed_size = r.get("size", 0)
+
+        if key == "apt_cache":
+            clean_apt_cache(log_cb=log)
+        elif key == "apt_orphans":
+            clean_apt_orphans(log_cb=log)
+        elif key == "journal_logs":
+            clean_journal_logs(log_cb=log)
+        elif key == "var_logs":
+            clean_var_logs(log_cb=log)
+        elif key == "thumbnails":
+            clean_thumbnails(log_cb=log)
+        elif key == "trash":
+            clean_trash(log_cb=log)
+        elif key == "flatpak_unused":
+            clean_flatpak_unused(log_cb=log, unused_refs=r.get("unused_refs", []))
+        elif key == "python_cache":
+            clean_python_cache(r.get("files_list", []), log_cb=log)
+        elif key == "docker":
+            clean_docker_prune(log_cb=log)
+        elif key == "snap_cache":
+            snaps = r.get("disabled_snaps", [])
+            if snaps:
+                clean_snap_old(snaps, log_cb=log)
+            else:
+                log("ℹ️  Nenhuma versão desactivada de Snap para remover", "info")
+        elif key == "user_cache":
+            self.after(0, lambda: self._show_cache_dialog(r))
+            return
+        else:
+            log(f"⚠️  Limpeza manual necessária para: {r['label']}", "warn")
+
+        # Registar no histórico
+        if freed_size > 0:
+            add_history_entry("limpeza", r.get("label", key), freed_size,
+                               details=f"Página de Análise")
+
+        self.after(0, lambda: self.set_status(f"Limpeza concluída: {r['label']} — a re-analisar...", "success"))
+        # Re-analisar para actualizar os valores
+        self.after(500, self._quick_scan)
+
+    def _show_cache_dialog(self, r):
+        subdirs = r.get("subdirs", [])
+        if not subdirs:
+            messagebox.showinfo("HCMaint", "Nenhuma subpasta encontrada.")
+            return
+
+        win = tk.Toplevel(self)
+        win.title("Seleccionar Cache a Limpar")
+        win.configure(bg=BG_MAIN)
+        win.geometry("500x460")
+        win.transient(self)
+        win.grab_set()
+
+        tk.Label(win, text="Seleccione as pastas de cache a remover:",
+                 font=("Segoe UI", 10), bg=BG_MAIN, fg=TEXT_PRI).pack(
+            padx=16, pady=(14, 6), anchor=tk.W)
+
+        frame = tk.Frame(win, bg=BG_MAIN)
+        frame.pack(fill=tk.BOTH, expand=True, padx=14, pady=4)
+
+        canvas = tk.Canvas(frame, bg=BG_MAIN, bd=0, highlightthickness=0)
+        vsb = ttk.Scrollbar(frame, style="HC.Vertical.TScrollbar", command=canvas.yview)
+        canvas.configure(yscrollcommand=vsb.set)
+        vsb.pack(side=tk.RIGHT, fill=tk.Y)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        inner = tk.Frame(canvas, bg=BG_MAIN)
+        canvas.create_window((0, 0), window=inner, anchor=tk.NW)
+
+        vars_ = []
+        for name, sz, path in subdirs:
+            v = tk.BooleanVar(value=sz > 5 * 1024 * 1024)  # pre-seleccionar > 5MB
+            vars_.append((v, path, sz))
+            row = tk.Frame(inner, bg=BG_MAIN)
+            row.pack(fill=tk.X, pady=1)
+            tk.Checkbutton(row, variable=v, bg=BG_MAIN, fg=TEXT_PRI,
+                           activebackground=BG_PANEL, selectcolor=BG_CARD,
+                           bd=0).pack(side=tk.LEFT)
+            tk.Label(row, text=f"{fmt(sz):>9}  {name}",
+                     font=("Consolas", 9), bg=BG_MAIN,
+                     fg=WARNING if sz > 50*1024*1024 else TEXT_PRI).pack(side=tk.LEFT)
+
+        inner.update_idletasks()
+        canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def do_clean():
+            selected = [(path, sz) for v, path, sz in vars_ if v.get()]
+            win.destroy()
+            if not selected:
                 return
 
-        if messagebox.askyesno("Limpar Tudo",
-                f"Limpar {format_size(total)} de ficheiros?\n\nEsta a\u00e7\u00e3o \u00e9 irrevers\u00edvel."):
-            all_items = [item for r in self._cleaner_results.values() for item in r.get("items", [])]
-            threading.Thread(target=lambda: self._do_clean(all_items, None), daemon=True).start()
+            def worker():
+                def log(msg, tag="recv"):
+                    self.after(0, lambda m=msg, t=tag: self._dlog(m, t))
+                for path, sz in selected:
+                    clean_user_cache_subdir(path, log_cb=log)
+                self.after(0, lambda: self.set_status("Cache do utilizador limpa", "success"))
 
-    def _do_clean(self, items, cat_key):
-        cleaned = 0; failed = 0
-        total_items = max(len(items), 1)
+            threading.Thread(target=worker, daemon=True).start()
+            self._show("dashboard")
 
-        # Miniaturas: parar Explorer para evitar corrupção de ícones
-        if cat_key == "thumbnail_cache":
-            def pb(msg):
-                self.after(0, lambda m=msg: self.set_status(m, "info"))
-            _, freed, errs = safe_clean_thumbnails(items, progress_cb=pb)
-            cleaned = freed; failed = errs
-            self.after(0, lambda: self._clean_progress.__setitem__("value", 100))
-        else:
-            for i, item in enumerate(items):
-                ok, _ = clean_item(item)
-                if ok: cleaned += item.get("size", 0)
-                else:  failed  += 1
-                self.after(0, lambda p=(i+1)/total_items*100: self._clean_progress.__setitem__("value", p))
+        btn_f = tk.Frame(win, bg=BG_MAIN)
+        btn_f.pack(fill=tk.X, padx=14, pady=10)
+        create_button(btn_f, "🗑️  Limpar Seleccionado", do_clean, "primary").pack(side=tk.RIGHT, padx=4)
+        create_button(btn_f, "Cancelar", win.destroy, "secondary").pack(side=tk.RIGHT, padx=4)
 
-        if cat_key:
-            self._cleaner_results[cat_key]["items"] = []; self._cleaner_results[cat_key]["size"] = 0
-        else:
-            for key in self._cleaner_results:
-                self._cleaner_results[key]["items"] = []; self._cleaner_results[key]["size"] = 0
-        def _update_ui():
-            self._refresh_cleaner_results()
-            self._file_tree.delete(*self._file_tree.get_children())
-            self._clean_total_lbl.config(text="Total detectado:  0 B")
-            self._clean_progress["value"] = 0
-            self.set_status(f"✅ Limpo: {format_size(cleaned)}  •  {failed} erros",
-                            "success" if not failed else "warning")
-            messagebox.showinfo("Limpeza Concluída",
-                f"✅  {format_size(cleaned)} libertados\n"
-                f"{'⚠️  ' + str(failed) + ' ficheiros não foi possível remover' if failed else '🧹  Tudo limpo!'}")
-        self.after(0, _update_ui)
+    # ── Página Limpeza ──────────────────────────────────────────
 
-    # ──────────── REGISTRY PAGE ────────────
-    def _build_registry(self):
+    def _pg_clean(self):
         page = tk.Frame(self._content, bg=BG_MAIN)
+
         hdr = tk.Frame(page, bg=BG_MAIN)
-        hdr.pack(fill=tk.X, padx=14, pady=(10, 6))
-        tk.Label(hdr, text="🔑  Limpeza do Registo", font=("Segoe UI", 13, "bold"),
+        hdr.pack(fill=tk.X, padx=20, pady=(16, 6))
+        tk.Label(hdr, text="🧹  Limpeza", font=("Segoe UI", 16, "bold"),
                  bg=BG_MAIN, fg=TEXT_PRI).pack(side=tk.LEFT)
-        btn_f = tk.Frame(hdr, bg=BG_MAIN)
-        btn_f.pack(side=tk.RIGHT)
-        create_button(btn_f, "🔍 Analisar",             self._scan_registry,    "teal"   ).pack(side=tk.LEFT, padx=4)
-        create_button(btn_f, "🗑️ Corrigir Selecionado", self._fix_selected_reg, "primary").pack(side=tk.LEFT, padx=4)
-        create_button(btn_f, "✨ Corrigir Tudo",         self._fix_all_reg,      "warning").pack(side=tk.LEFT, padx=4)
-        tk.Frame(page, bg=DIVIDER, height=1).pack(fill=tk.X, padx=14, pady=3)
-        tk.Label(page,
-            text="⚠️  Crie um ponto de restauro antes de modificar o registo. O HC-Cleaner apenas remove entradas inválidas confirmadas.",
-            font=("Segoe UI", 9), bg=BG_MAIN, fg=WARNING, anchor=tk.W).pack(fill=tk.X, padx=14, pady=(0, 4))
-        self._reg_progress = ttk.Progressbar(page, style="HC.Horizontal.TProgressbar", mode="determinate")
-        self._reg_progress.pack(fill=tk.X, padx=14, pady=(0, 6))
-        card = create_card(page, title="ENTRADAS PROBLEMÁTICAS NO REGISTO")
-        card.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 10))
-        cols = ("categoria", "descricao", "caminho", "gravidade")
-        self._reg_tree = ttk.Treeview(card, style="HC.Treeview", columns=cols,
-                                       show="headings", selectmode="extended")
-        self._reg_tree.heading("categoria", text="Categoria")
-        self._reg_tree.heading("descricao", text="Descrição")
-        self._reg_tree.heading("caminho",   text="Chave de Registo")
-        self._reg_tree.heading("gravidade", text="Risco")
-        self._reg_tree.column("categoria", width=180)
-        self._reg_tree.column("descricao", width=350)
-        self._reg_tree.column("caminho",   width=280)
-        self._reg_tree.column("gravidade", width=80, anchor=tk.CENTER)
-        sb = ttk.Scrollbar(card, style="HC.Vertical.TScrollbar", command=self._reg_tree.yview)
-        sb.pack(side=tk.RIGHT, fill=tk.Y)
-        self._reg_tree.configure(yscrollcommand=sb.set)
-        self._reg_tree.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
-        self._reg_count_lbl = tk.Label(page, text="", font=("Segoe UI", 10, "bold"),
-                                        bg=BG_MAIN, fg=ACCENT, anchor=tk.E)
-        self._reg_count_lbl.pack(fill=tk.X, padx=24, pady=(0, 4))
-        return page
+        tk.Frame(page, bg=DIVIDER, height=1).pack(fill=tk.X, padx=20, pady=4)
 
-    def _scan_registry(self):
-        if platform.system() != "Windows":
-            messagebox.showinfo("HC-Cleaner", "Apenas disponível no Windows."); return
-        self._reg_tree.delete(*self._reg_tree.get_children())
-        self._reg_progress["value"] = 0
-        self.set_status("A analisar registo...", "info")
-        threading.Thread(target=self._scan_registry_worker, daemon=True).start()
+        # Grid de botões de limpeza individuais
+        grid = tk.Frame(page, bg=BG_MAIN)
+        grid.pack(fill=tk.X, padx=20, pady=8)
 
-    def _scan_registry_worker(self):
-        def prog(i, total, msg):
-            self.after(0, lambda: self._reg_progress.__setitem__("value", i/max(total,1)*100))
-            self.after(0, lambda m=msg: self.set_status(m, "info"))
-        self._registry_issues = scan_all_registry(progress_callback=prog)
-        self.after(0, self._refresh_registry_results)
-
-    def _refresh_registry_results(self):
-        self._reg_tree.delete(*self._reg_tree.get_children())
-        color_map = {"warning": ("médio", WARNING), "info": ("baixo", INFO), "error": ("alto", DANGER)}
-        for i, issue in enumerate(self._registry_issues):
-            risk, color = color_map.get(issue.get("severity", "info"), ("baixo", INFO))
-            self._reg_tree.insert("", tk.END, iid=str(i),
-                                  values=(issue.get("label",""),
-                                          issue.get("description","")[:80],
-                                          f"{issue.get('hive','')}\\...\\{issue.get('name','')}",
-                                          risk.upper()))
-            self._reg_tree.tag_configure(risk, foreground=color)
-            self._reg_tree.item(str(i), tags=(risk,))
-        n = len(self._registry_issues)
-        self._reg_count_lbl.config(text=f"Total: {n} entrada{'s' if n!=1 else ''} problemática{'s' if n!=1 else ''}")
-        self._reg_progress["value"] = 100
-        self.set_status(f"Registo: {n} problemas encontrados", "warning" if n > 0 else "success")
-
-    def _fix_selected_reg(self):
-        sel = self._reg_tree.selection()
-        if not sel:
-            messagebox.showinfo("HC-Cleaner", "Selecione entradas para corrigir."); return
-        issues = [self._registry_issues[int(s)] for s in sel if int(s) < len(self._registry_issues)]
-        if messagebox.askyesno("Corrigir Registo",
-                f"Remover {len(issues)} entrada(s) do registo?\n\nEsta ação pode ser irreversível."):
-            self._do_fix_registry(issues)
-
-    def _fix_all_reg(self):
-        if not self._registry_issues:
-            messagebox.showinfo("HC-Cleaner", "Execute 'Analisar' primeiro."); return
-        if messagebox.askyesno("Corrigir Tudo", f"Remover {len(self._registry_issues)} entradas problemáticas?"):
-            self._do_fix_registry(self._registry_issues)
-
-    def _do_fix_registry(self, issues):
-        ok_count = fail_count = 0
-        for issue in issues:
-            ok, _ = delete_registry_issue(issue)
-            if ok: ok_count += 1
-            else:  fail_count += 1
-        messagebox.showinfo("Registo Limpo",
-            f"✅ {ok_count} entradas removidas\n❌ {fail_count} falhas (podem requerer Admin)")
-        self._registry_issues = [i for i in self._registry_issues if i not in issues]
-        self._refresh_registry_results()
-
-    # ──────────── PROGRAMS PAGE ────────────
-    def _build_programs(self):
-        page = tk.Frame(self._content, bg=BG_MAIN)
-        hdr = tk.Frame(page, bg=BG_MAIN)
-        hdr.pack(fill=tk.X, padx=14, pady=(10, 4))
-        tk.Label(hdr, text="📦  Programas Instalados", font=("Segoe UI", 13, "bold"),
-                 bg=BG_MAIN, fg=TEXT_PRI).pack(side=tk.LEFT)
-        btn_f = tk.Frame(hdr, bg=BG_MAIN)
-        btn_f.pack(side=tk.RIGHT)
-        create_button(btn_f, "🔄 Actualizar", self._load_programs,        "teal"    ).pack(side=tk.LEFT, padx=3)
-        create_button(btn_f, "⚙️ Painel",     open_programs_and_features, "secondary").pack(side=tk.LEFT, padx=3)
-        tk.Frame(page, bg=DIVIDER, height=1).pack(fill=tk.X, padx=14, pady=3)
-
-        act_f = tk.Frame(page, bg=BG_PANEL, highlightthickness=1, highlightbackground=BORDER)
-        act_f.pack(fill=tk.X, padx=14, pady=(0, 6))
-        tk.Label(act_f, text="  Desinstalação:", font=("Segoe UI", 9, "bold"),
-                 bg=BG_PANEL, fg=TEXT_SEC).pack(side=tk.LEFT, padx=(8, 12), pady=8)
-        create_button(act_f, "🗑️  Normal",   self._uninstall_selected,       "primary").pack(side=tk.LEFT, padx=4, pady=6)
-        create_button(act_f, "💪  Forçada",  self._force_uninstall_selected, "warning").pack(side=tk.LEFT, padx=4, pady=6)
-        create_button(act_f, "🔷  Remover Edge", self._uninstall_edge,        "danger" ).pack(side=tk.LEFT, padx=4, pady=6)
-        self._auto_clean_var = tk.BooleanVar(value=True)
-        tk.Checkbutton(act_f, text="Limpar resíduos automaticamente após desinstalar",
-                       variable=self._auto_clean_var, bg=BG_PANEL, fg=TEXT_SEC,
-                       selectcolor=BG_CARD, activebackground=BG_PANEL,
-                       activeforeground=TEXT_PRI, font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=16)
-
-        search_f = tk.Frame(page, bg=BG_MAIN)
-        search_f.pack(fill=tk.X, padx=14, pady=(0, 4))
-        tk.Label(search_f, text="🔍", font=("Segoe UI", 11), bg=BG_MAIN, fg=TEXT_SEC).pack(side=tk.LEFT, padx=(0, 6))
-        self._prog_search = tk.Entry(search_f, bg=BG_INPUT, fg=TEXT_PRI, font=("Segoe UI", 10),
-                                      bd=0, highlightthickness=1, highlightbackground=BORDER,
-                                      highlightcolor=ACCENT, insertbackground=TEXT_PRI)
-        self._prog_search.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        self._prog_search.bind("<KeyRelease>", self._filter_programs)
-
-        split = tk.Frame(page, bg=BG_MAIN)
-        split.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 10))
-
-        left = create_card(split, title="LISTA DE PROGRAMAS")
-        left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 8))
-        cols = ("name", "version", "publisher", "size", "date", "tipo")
-        self._prog_tree = ttk.Treeview(left, style="HC.Treeview", columns=cols,
-                                        show="headings", selectmode="browse")
-        for col, text, width, anchor in [
-            ("name",      "Nome",        240, tk.W),
-            ("version",   "Versão",       80, tk.W),
-            ("publisher", "Fabricante",  150, tk.W),
-            ("size",      "Tamanho",      75, tk.E),
-            ("date",      "Instalação",   80, tk.CENTER),
-            ("tipo",      "Tipo",         80, tk.CENTER),
-        ]:
-            self._prog_tree.heading(col, text=text)
-            self._prog_tree.column(col, width=width, anchor=anchor)
-        self._prog_tree.tag_configure("protected", foreground=WARNING)
-        self._prog_tree.tag_configure("no_uninst",  foreground=TEXT_MUT)
-        sb = ttk.Scrollbar(left, style="HC.Vertical.TScrollbar", command=self._prog_tree.yview)
-        sb.pack(side=tk.RIGHT, fill=tk.Y)
-        self._prog_tree.configure(yscrollcommand=sb.set)
-        self._prog_tree.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
-        self._prog_count_lbl = tk.Label(left, text="", font=("Segoe UI", 8),
-                                         bg=BG_CARD, fg=TEXT_MUT, anchor=tk.W, padx=6)
-        self._prog_count_lbl.pack(fill=tk.X, pady=(0, 4))
-
-        right = create_card(split, title="LOG DE OPERAÇÕES")
-        right.pack(side=tk.LEFT, fill=tk.BOTH)
-        right.configure(width=320); right.pack_propagate(False)
-        lf, lt = setup_log_area(right)
-        lf.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
-        self._prog_log = lt
-        return page
-
-    def _prog_log_write(self, msg, tag="recv"):
-        self._prog_log.config(state=tk.NORMAL)
-        ts = datetime.now().strftime("%H:%M:%S")
-        self._prog_log.insert(tk.END, f"[{ts}] {msg}\n", tag)
-        self._prog_log.see(tk.END)
-        self._prog_log.config(state=tk.DISABLED)
-
-    def _load_programs(self):
-        self.set_status("A carregar programas...", "info")
-        threading.Thread(target=self._load_programs_worker, daemon=True).start()
-
-    def _load_programs_worker(self):
-        self._programs_list = get_installed_programs()
-        self.after(0, self._refresh_programs_list)
-
-    def _refresh_programs_list(self):
-        self._prog_tree.delete(*self._prog_tree.get_children())
-        for prog in self._programs_list:
-            size_str  = f"{prog['size_mb']} MB" if prog['size_mb'] else "—"
-            protected = prog.get("protected_type")
-            has_u     = prog.get("has_uninstaller", True)
-            if protected:   tipo, tag = "🔷 Protegido",   "protected"
-            elif not has_u: tipo, tag = "⚠️ Sem uninst.", "no_uninst"
-            else:           tipo, tag = "✅ Normal",       ""
-            self._prog_tree.insert("", tk.END,
-                values=(prog["name"], prog["version"] or "—", prog["publisher"] or "—",
-                        size_str, prog["install_date"] or "—", tipo),
-                tags=(tag,) if tag else ())
-        n = len(self._programs_list)
-        self._prog_count_lbl.config(text=f"  {n} programas encontrados")
-        self.set_status(f"{n} programas instalados", "info")
-
-    def _filter_programs(self, e=None):
-        q = self._prog_search.get().lower()
-        self._prog_tree.delete(*self._prog_tree.get_children())
-        filtered = [p for p in self._programs_list
-                    if q in p["name"].lower() or q in (p["publisher"] or "").lower()]
-        for prog in filtered:
-            size_str  = f"{prog['size_mb']} MB" if prog['size_mb'] else "—"
-            protected = prog.get("protected_type")
-            has_u     = prog.get("has_uninstaller", True)
-            if protected:   tipo, tag = "🔷 Protegido",   "protected"
-            elif not has_u: tipo, tag = "⚠️ Sem uninst.", "no_uninst"
-            else:           tipo, tag = "✅ Normal",       ""
-            self._prog_tree.insert("", tk.END,
-                values=(prog["name"], prog["version"] or "—", prog["publisher"] or "—",
-                        size_str, prog["install_date"] or "—", tipo),
-                tags=(tag,) if tag else ())
-        self._prog_count_lbl.config(text=f"  {len(filtered)} de {len(self._programs_list)} programas")
-
-    def _get_selected_program(self):
-        sel = self._prog_tree.selection()
-        if not sel:
-            messagebox.showinfo("HC-Cleaner", "Selecione um programa primeiro."); return None
-        prog_name = self._prog_tree.item(sel[0])["values"][0]
-        return next((p for p in self._programs_list if p["name"] == prog_name), None)
-
-    def _uninstall_selected(self):
-        prog = self._get_selected_program()
-        if not prog: return
-        if not prog.get("has_uninstaller"):
-            if messagebox.askyesno("Sem Desinstalador",
-                    f"'{prog['name']}' não tem desinstalador.\nUsar Desinstalação Forçada?"):
-                self._force_uninstall_selected()
-            return
-        if messagebox.askyesno("Desinstalar",
-                f"Desinstalar '{prog['name']}'?\n"
-                f"{'✅ Resíduos serão limpos automaticamente.' if self._auto_clean_var.get() else ''}"):
-            threading.Thread(target=self._do_uninstall_normal, args=(prog,), daemon=True).start()
-
-    def _do_uninstall_normal(self, prog):
-        name = prog["name"]
-        self.after(0, lambda: self._prog_log_write(f"▶ A desinstalar: {name}", "info"))
-        self.after(0, lambda: self.set_status(f"A desinstalar {name}...", "warning"))
-        def cb(msg): self.after(0, lambda m=msg: self._prog_log_write(f"   {m}", "muted"))
-        ok, msg = uninstall_program(prog, callback=cb)
-        if ok:
-            self.after(0, lambda: self._prog_log_write(f"✅ {name} desinstalado", "ok"))
-            if self._auto_clean_var.get():
-                self.after(0, lambda: self._prog_log_write("🧹 A limpar resíduos...", "warn"))
-                self._do_clean_residuals(prog)
-            self.after(0, lambda: self.set_status(f"'{name}' removido com sucesso", "success"))
-            self.after(500, self._load_programs)
-        else:
-            self.after(0, lambda: self._prog_log_write(f"❌ Erro: {msg}", "error"))
-            self.after(0, lambda: self.set_status(f"Erro ao desinstalar {name}", "error"))
-
-    def _force_uninstall_selected(self):
-        prog = self._get_selected_program()
-        if not prog: return
-        if not messagebox.askyesno("⚠️ Desinstalação Forçada",
-                f"Remover '{prog['name']}' sem desinstalador?\n\n"
-                "• Termina processos\n• Apaga pasta\n• Limpa registo\n\nIRREVERSÍVEL. Continuar?"):
-            return
-        threading.Thread(target=self._do_force_uninstall, args=(prog,), daemon=True).start()
-
-    def _do_force_uninstall(self, prog):
-        name = prog["name"]
-        self.after(0, lambda: self._prog_log_write(f"💪 Remoção forçada: {name}", "warn"))
-        self.after(0, lambda: self.set_status(f"Remoção forçada de {name}...", "warning"))
-        def cb(msg): self.after(0, lambda m=msg: self._prog_log_write(f"   {m}", "muted"))
-        ok, report = force_uninstall(prog, callback=cb)
-        folders  = len(report.get("folders_removed", []))
-        reg_keys = len(report.get("reg_keys_removed", []))
-        procs    = len(report.get("processes_killed", []))
-        errors   = len(report.get("errors", []))
-        self.after(0, lambda: self._prog_log_write(
-            f"{'✅' if ok else '⚠️'} {procs} processos, {folders} pastas, {reg_keys} chaves, {errors} erros",
-            "ok" if ok else "warn"))
-        if self._auto_clean_var.get():
-            self.after(0, lambda: self._prog_log_write("🧹 A limpar resíduos...", "warn"))
-            self._do_clean_residuals(prog)
-        self.after(0, lambda: self.set_status(
-            f"'{name}' removido — {folders} pastas, {reg_keys} chaves",
-            "success" if ok else "warning"))
-        self.after(500, self._load_programs)
-
-    def _uninstall_edge(self):
-        if not messagebox.askyesno("🔷 Remover Microsoft Edge",
-                "Remover o Microsoft Edge?\n\n"
-                "⚠️  Tenha outro browser instalado antes de continuar.\n\nContinuar?"):
-            return
-        threading.Thread(target=self._do_uninstall_edge, daemon=True).start()
-
-    def _do_uninstall_edge(self):
-        self.after(0, lambda: self._prog_log_write("🔷 A remover Microsoft Edge...", "warn"))
-        self.after(0, lambda: self.set_status("A remover Microsoft Edge...", "warning"))
-        def cb(msg): self.after(0, lambda m=msg: self._prog_log_write(f"   {m}", "muted"))
-        ok, msg = uninstall_edge(callback=cb)
-        if ok:
-            self.after(0, lambda: self._prog_log_write(f"✅ {msg}", "ok"))
-            edge_prog = {"name": "Microsoft Edge",
-                         "install_location": r"C:\Program Files (x86)\Microsoft\Edge",
-                         "key_name": "", "hive": "HKLM",
-                         "reg_path": r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"}
-            if self._auto_clean_var.get():
-                self.after(0, lambda: self._prog_log_write("🧹 A limpar resíduos...", "warn"))
-                self._do_clean_residuals(edge_prog)
-            self.after(0, lambda: self.set_status("Microsoft Edge removido", "success"))
-            self.after(500, self._load_programs)
-        else:
-            self.after(0, lambda: self._prog_log_write(f"❌ {msg}", "error"))
-            self.after(0, lambda: self.set_status("Não foi possível remover o Edge", "error"))
-            self.after(0, lambda: messagebox.showerror("Edge",
-                f"Falha ao remover Edge:\n\n{msg}\n\nTenta a Desinstalação Forçada."))
-
-    def _do_clean_residuals(self, prog):
-        def cb(msg): self.after(0, lambda m=msg: self._prog_log_write(f"   {m}", "muted"))
-        report  = clean_residuals(prog, callback=cb)
-        freed   = report.get("bytes_freed", 0)
-        folders = len(report.get("folders_removed", []))
-        reg_k   = len(report.get("reg_keys_removed", []))
-        self.after(0, lambda: self._prog_log_write(
-            f"🧹 {format_size(freed)} libertados, {folders} pastas, {reg_k} chaves", "ok"))
-
-    # ──────────── MALWARE PAGE ────────────
-    def _build_malware(self):
-        page = tk.Frame(self._content, bg=BG_MAIN)
-        hdr = tk.Frame(page, bg=BG_MAIN)
-        hdr.pack(fill=tk.X, padx=14, pady=(10, 6))
-        tk.Label(hdr, text="🦠  Detecção de Ameaças", font=("Segoe UI", 13, "bold"),
-                 bg=BG_MAIN, fg=TEXT_PRI).pack(side=tk.LEFT)
-        btn_f = tk.Frame(hdr, bg=BG_MAIN)
-        btn_f.pack(side=tk.RIGHT)
-        create_button(btn_f, "🔍 Analisar",        self._scan_malware, "teal"   ).pack(side=tk.LEFT, padx=4)
-        create_button(btn_f, "🛡️ Windows Defender", self._run_defender, "primary").pack(side=tk.LEFT, padx=4)
-        tk.Frame(page, bg=DIVIDER, height=1).pack(fill=tk.X, padx=14, pady=3)
-        tk.Label(page,
-            text="ℹ️  Análise heurística local. Para protecção completa, use o Windows Defender ou um antivírus dedicado.",
-            font=("Segoe UI", 9), bg=BG_MAIN, fg=INFO, anchor=tk.W).pack(fill=tk.X, padx=14, pady=(0, 4))
-        self._mal_progress = ttk.Progressbar(page, style="HC.Horizontal.TProgressbar", mode="indeterminate")
-        self._mal_progress.pack(fill=tk.X, padx=14, pady=(0, 6))
-
-        stats_f = tk.Frame(page, bg=BG_MAIN)
-        stats_f.pack(fill=tk.X, padx=14, pady=(0, 6))
-        self._mal_stat_labels = {}
-        for label, color in [("🔴 Alto Risco", DANGER), ("🟡 Médio Risco", WARNING), ("🔵 Baixo Risco", INFO)]:
-            sc = tk.Frame(stats_f, bg=BG_CARD, highlightthickness=1, highlightbackground=BORDER)
-            sc.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=4)
-            tk.Label(sc, text=label, font=("Segoe UI", 8), bg=BG_CARD, fg=TEXT_MUT).pack(pady=(6, 0))
-            lbl = tk.Label(sc, text="—", font=("Segoe UI", 14, "bold"), bg=BG_CARD, fg=color)
-            lbl.pack(pady=(0, 6))
-            self._mal_stat_labels[label] = lbl
-
-        card = create_card(page, title="AMEAÇAS DETECTADAS")
-        card.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 10))
-        cols = ("risk", "type", "description", "path", "action")
-        self._mal_tree = ttk.Treeview(card, style="HC.Treeview", columns=cols,
-                                       show="headings", selectmode="browse")
-        for col, text, width, anchor in [
-            ("risk",        "Risco",       70,  tk.CENTER),
-            ("type",        "Tipo",        140, tk.W),
-            ("description", "Descrição",   300, tk.W),
-            ("path",        "Localização", 280, tk.W),
-            ("action",      "Acção",        80, tk.CENTER),
-        ]:
-            self._mal_tree.heading(col, text=text)
-            self._mal_tree.column(col, width=width, anchor=anchor)
-        sb = ttk.Scrollbar(card, style="HC.Vertical.TScrollbar", command=self._mal_tree.yview)
-        sb.pack(side=tk.RIGHT, fill=tk.Y)
-        self._mal_tree.configure(yscrollcommand=sb.set)
-        self._mal_tree.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
-        return page
-
-    def _scan_malware(self):
-        self._mal_tree.delete(*self._mal_tree.get_children())
-        self._mal_progress.start(12)
-        self.set_status("A verificar ameaças...", "warning")
-        threading.Thread(target=self._scan_malware_worker, daemon=True).start()
-
-    def _scan_malware_worker(self):
-        from modules.malware import (
-            scan_temp_executables, scan_autorun_entries, scan_winlogon,
-            scan_running_processes, scan_hosts_file,
-            TIMEOUT_TEMP, TIMEOUT_AUTORUN, TIMEOUT_WINLOGON,
-            TIMEOUT_PROCESSES, TIMEOUT_HOSTS, _run_with_timeout,
-        )
-        steps = [
-            ("Executáveis em temporários...", scan_temp_executables,  TIMEOUT_TEMP + 2),
-            ("Entradas de arranque...",        scan_autorun_entries,   TIMEOUT_AUTORUN + 2),
-            ("Winlogon Shell/Userinit...",     scan_winlogon,          TIMEOUT_WINLOGON + 2),
-            ("Processos suspeitos...",         scan_running_processes, TIMEOUT_PROCESSES + 3),
-            ("Ficheiro hosts...",              scan_hosts_file,        TIMEOUT_HOSTS + 2),
+        actions = [
+            ("📦  APT Clean",        self._act_apt_clean,     "teal",
+             "Remove .deb em cache\n/var/cache/apt/archives/"),
+            ("🗑️  APT Autoremove",   self._act_apt_autoremove,"teal",
+             "Remove pacotes não necessários"),
+            ("📋  Journal (30d)",    self._act_journal,        "teal",
+             "Limpa logs com mais de 30 dias"),
+            ("🗒️  Logs Antigos",     self._act_var_logs,       "teal",
+             "Remove *.gz e *.old em /var/log/"),
+            ("🖼️  Miniaturas",       self._act_thumbs,         "teal",
+             "Limpa ~/.cache/thumbnails/"),
+            ("🗑️  Reciclagem",       self._act_trash,          "teal",
+             "Esvazia ~/.local/share/Trash/"),
+            ("🐍  Cache Python",     self._act_pycache,        "teal",
+             "Remove __pycache__ e .pyc em ~/Programas"),
+            ("📱  Flatpak Unused",   self._act_flatpak,        "olive",
+             "Remove runtimes Flatpak não usados"),
+            ("🐳  Docker Prune",     self._act_docker,         "olive",
+             "Remove containers e imagens parados"),
+            ("🔩  Snap Old",         self._act_snap,           "olive",
+             "Remove versões desactivadas de Snaps"),
         ]
-        self._malware_findings = []
-        for step_msg, step_fn, step_timeout in steps:
-            self.after(0, lambda m=step_msg: self.set_status(f"   {m}", "warning"))
-            result, _ = _run_with_timeout(step_fn, step_timeout, default=[])
-            if result: self._malware_findings.extend(result)
-        self.after(0, self._refresh_malware_results)
 
-    def _refresh_malware_results(self):
-        self._mal_progress.stop()
-        self._mal_progress["value"] = 100
-        self._mal_tree.delete(*self._mal_tree.get_children())
-        type_labels = {
-            "temp_executable":    "Executável Temporário",
-            "autorun_missing":    "Arranque Inválido",
-            "autorun_suspicious": "Arranque Suspeito",
-            "winlogon_hijack":    "Winlogon Hijack",
-            "suspicious_process": "Processo Suspeito",
-            "hosts_redirect":     "Redireccionamento Hosts",
-            "hosts_large":        "Ficheiro Hosts Alterado",
-        }
-        risk_counts = {"alto": 0, "médio": 0, "baixo": 0}
-        for finding in self._malware_findings:
-            risk = finding.get("risk", "baixo")
-            risk_counts[risk] = risk_counts.get(risk, 0) + 1
-            icon = RISK_ICONS.get(risk, "⚪")
-            path_short = finding["path"]
-            if len(path_short) > 50: path_short = "..." + path_short[-47:]
-            self._mal_tree.insert("", tk.END, values=(
-                f"{icon} {risk.upper()}",
-                type_labels.get(finding.get("type", ""), finding.get("type", "")),
-                finding.get("description", "")[:80],
-                path_short, finding.get("action", "—"),
-            ))
-        for lbl_text, risk_key in [("🔴 Alto Risco","alto"),("🟡 Médio Risco","médio"),("🔵 Baixo Risco","baixo")]:
-            self._mal_stat_labels[lbl_text].config(text=str(risk_counts.get(risk_key, 0)))
-        n = len(self._malware_findings)
-        self.set_status("✅ Nenhuma ameaça detectada" if n == 0
-                        else f"⚠️ {n} ameaças detectadas — reveja os resultados",
-                        "success" if n == 0 else "warning")
+        cols = 2
+        for i, (label, cmd, style, tooltip) in enumerate(actions):
+            row = i // cols
+            col = i % cols
+            cell = tk.Frame(grid, bg=BG_CARD,
+                             highlightthickness=1, highlightbackground=BORDER)
+            cell.grid(row=row, column=col, padx=6, pady=5, sticky="nsew")
+            grid.columnconfigure(col, weight=1)
 
-    def _run_defender(self):
-        ok, msg = run_windows_defender_quick()
-        if ok: messagebox.showinfo("Windows Defender", msg)
-        else:  messagebox.showwarning("Windows Defender", msg)
+            tk.Label(cell, text=label, font=("Segoe UI", 10, "bold"),
+                     bg=BG_CARD, fg=TEXT_PRI, anchor=tk.W).pack(
+                fill=tk.X, padx=12, pady=(10, 2))
+            tk.Label(cell, text=tooltip, font=("Segoe UI", 8),
+                     bg=BG_CARD, fg=TEXT_MUT, anchor=tk.W,
+                     wraplength=340, justify=tk.LEFT).pack(
+                fill=tk.X, padx=12, pady=(0, 6))
+            create_button(cell, "Executar →", cmd, style).pack(
+                anchor=tk.E, padx=12, pady=(0, 10))
 
-    # ──────────── ABOUT PAGE ────────────
-    def _build_about(self):
-        page = tk.Frame(self._content, bg=BG_MAIN)
-        hdr = tk.Frame(page, bg=BG_MAIN)
-        hdr.pack(fill=tk.X, padx=14, pady=(10, 6))
-        tk.Label(hdr, text="ℹ️  Sobre o HC-Cleaner",
-                 font=("Segoe UI", 13, "bold"), bg=BG_MAIN, fg=TEXT_PRI).pack(side=tk.LEFT)
-        tk.Frame(page, bg=DIVIDER, height=1).pack(fill=tk.X, padx=14, pady=3)
+        # Log de limpeza
+        lc = create_card(page, title="LOG DE LIMPEZA")
+        lc.pack(fill=tk.BOTH, expand=True, padx=20, pady=(6, 14))
+        lf, lt = setup_log_area(lc)
+        lf.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
+        self._clean_log = lt
 
-        body = tk.Frame(page, bg=BG_MAIN)
-        body.pack(fill=tk.BOTH, expand=True, padx=40, pady=20)
-
-        logo_card = create_card(body)
-        logo_card.pack(fill=tk.X, pady=(0, 12))
-        logo_inner = tk.Frame(logo_card, bg=BG_CARD)
-        logo_inner.pack(fill=tk.X, padx=20, pady=20)
-        if self.logo_image:
-            lbl = tk.Label(logo_inner, image=self.logo_image, bg=BG_CARD)
-            lbl.image = self.logo_image
-            lbl.pack(pady=(0, 8))
-        tk.Label(logo_inner, text="HC-Cleaner",
-                 font=("Segoe UI", 22, "bold"), bg=BG_CARD, fg=ACCENT).pack()
-        tk.Label(logo_inner, text="Ferramenta de Manutenção e Limpeza do Windows",
-                 font=("Segoe UI", 10), bg=BG_CARD, fg=TEXT_SEC).pack(pady=(4, 0))
-        tk.Label(logo_inner, text="v1.4.9",
-                 font=("Segoe UI", 9), bg=BG_CARD, fg=TEXT_MUT).pack(pady=(2, 0))
-
-        info_frame = tk.Frame(body, bg=BG_MAIN)
-        info_frame.pack(fill=tk.X, pady=(0, 12))
-        left_col  = tk.Frame(info_frame, bg=BG_MAIN)
-        left_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 8))
-        right_col = tk.Frame(info_frame, bg=BG_MAIN)
-        right_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-        def info_card(parent, title, rows):
-            card = create_card(parent, title=title)
-            card.pack(fill=tk.X, pady=(0, 8))
-            for label, value, color in rows:
-                row = tk.Frame(card, bg=BG_CARD)
-                row.pack(fill=tk.X, padx=14, pady=4)
-                tk.Label(row, text=label, font=("Segoe UI", 9), bg=BG_CARD,
-                         fg=TEXT_MUT, width=18, anchor=tk.W).pack(side=tk.LEFT)
-                tk.Label(row, text=value, font=("Segoe UI", 9, "bold"),
-                         bg=BG_CARD, fg=color, anchor=tk.W).pack(side=tk.LEFT)
-
-        info_card(left_col, "INFORMAÇÕES", [
-            ("Versão",      "1.4.9",           ACCENT),
-            ("Autor",       "HCsoftware",      TEXT_PRI),
-            ("Localização", "Silves, Algarve", TEXT_PRI),
-            ("Licença",     "Uso privado",     TEXT_PRI),
-            ("Plataforma",  "Windows 10/11",   TEXT_PRI),
-        ])
-        info_card(left_col, "TECNOLOGIA", [
-            ("Linguagem",  "Python 3.10+", SUCCESS),
-            ("Interface",  "Tkinter",      SUCCESS),
-            ("Compilador", "PyInstaller",  SUCCESS),
-            ("GitHub",     "condessa",     ACCENT),
-        ])
-        info_card(right_col, "FUNCIONALIDADES", [
-            ("🧹 Limpeza",   "13 categorias de ficheiros",   TEXT_PRI),
-            ("🔑 Registo",   "8 tipos de verificação",       TEXT_PRI),
-            ("📦 Programas", "Desinstalação normal/forçada", TEXT_PRI),
-            ("🦠 Malware",   "5 fases heurísticas",          TEXT_PRI),
-            ("🔷 Edge",      "Remoção forçada suportada",    TEXT_PRI),
-        ])
-        info_card(right_col, "SISTEMA", [
-            ("SO",           platform.system() + " " + platform.release(), TEXT_PRI),
-            ("Arquitectura", platform.machine(),                            TEXT_PRI),
-            ("Python",       platform.python_version(),                    TEXT_PRI),
-            ("Computador",   platform.node(),                              TEXT_PRI),
-        ])
-
-        footer = tk.Frame(body, bg=BG_PANEL, highlightthickness=1, highlightbackground=BORDER)
-        footer.pack(fill=tk.X, pady=(4, 0))
-        tk.Label(footer,
-                 text="HC-Cleaner é uma alternativa ao CCleaner — sem telemetria, sem bloatware, código aberto.\n"
-                      "Desenvolvido em Python com tema HCsoftware. Distribua livremente para uso pessoal.",
-                 font=("Segoe UI", 9), bg=BG_PANEL, fg=TEXT_MUT,
-                 justify=tk.CENTER, pady=12).pack()
-
-        def open_github():
-            import webbrowser
-            webbrowser.open("https://github.com/condessa")
-        create_button(body, "🔗  GitHub — condessa", open_github, "teal").pack(pady=(10, 0))
         return page
 
+    def _clog(self, msg, tag="recv"):
+        self._clean_log.config(state=tk.NORMAL)
+        ts = datetime.now().strftime("%H:%M:%S")
+        self._clean_log.insert(tk.END, f"[{ts}]  {msg}\n", tag)
+        self._clean_log.see(tk.END)
+        self._clean_log.config(state=tk.DISABLED)
 
-# ─────────────────────────────────────────────
-# ENTRY POINT
-# ─────────────────────────────────────────────
+    def _run_clean(self, fn, *args):
+        def log(msg, tag="recv"):
+            self.after(0, lambda m=msg, t=tag: self._clog(m, t))
+        def worker():
+            fn(*args, log_cb=log)
+            self.after(0, lambda: self.set_status("Pronto", "success"))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _act_apt_clean(self):     self._run_clean(clean_apt_cache)
+    def _act_apt_autoremove(self):
+        if messagebox.askyesno("APT Autoremove", "Remover pacotes órfãos?\n(apt-get autoremove --purge)"):
+            self._run_clean(clean_apt_orphans)
+    def _act_journal(self):       self._run_clean(clean_journal_logs, 30)
+    def _act_var_logs(self):      self._run_clean(clean_var_logs)
+    def _act_thumbs(self):        self._run_clean(clean_thumbnails)
+    def _act_trash(self):
+        if messagebox.askyesno("Reciclagem", "Esvaziar reciclagem permanentemente?"):
+            self._run_clean(clean_trash)
+    def _act_pycache(self):
+        r = next((r for r in self._scan_results if r["key"] == "python_cache"), None)
+        if r:
+            self._run_clean(clean_python_cache, r.get("files_list", []))
+        else:
+            messagebox.showinfo("HCMaint", "Execute uma Análise primeiro para detectar caches Python.")
+    def _act_flatpak(self):       self._run_clean(clean_flatpak_unused)
+    def _act_docker(self):
+        if messagebox.askyesno("Docker Prune", "Remover containers parados e imagens não usadas?"):
+            self._run_clean(clean_docker_prune)
+    def _act_snap(self):
+        r = next((r for r in self._scan_results if r["key"] == "snap_cache"), None)
+        disabled = r.get("disabled_snaps", []) if r else []
+        if disabled:
+            self._run_clean(clean_snap_old, disabled)
+        else:
+            messagebox.showinfo("HCMaint", "Nenhuma versão desactivada de Snap encontrada.")
+
+    # ── Página Ferramentas ─────────────────────────────────────
+
+    def _pg_tools(self):
+        page = tk.Frame(self._content, bg=BG_MAIN)
+        hdr = tk.Frame(page, bg=BG_MAIN)
+        hdr.pack(fill=tk.X, padx=20, pady=(16, 6))
+        tk.Label(hdr, text="🛠️  Ferramentas", font=("Segoe UI", 16, "bold"),
+                 bg=BG_MAIN, fg=TEXT_PRI).pack(side=tk.LEFT)
+        tk.Frame(page, bg=DIVIDER, height=1).pack(fill=tk.X, padx=20, pady=4)
+
+        # Tab buttons frame
+        tab_f = tk.Frame(page, bg=BG_MAIN)
+        tab_f.pack(fill=tk.X, padx=20, pady=(4, 0))
+        tab_content = tk.Frame(page, bg=BG_MAIN)
+        tab_content.pack(fill=tk.BOTH, expand=True, padx=20, pady=8)
+
+        self._tools_frames = {}
+        tab_btns = {}
+
+        def switch_tab(key):
+            for k, (f, btn) in self._tools_frames.items():
+                if k == key:
+                    f.pack(fill=tk.BOTH, expand=True)
+                    btn.config(bg=ACCENT, fg="white")
+                else:
+                    f.pack_forget()
+                    btn.config(bg=BG_PANEL, fg=TEXT_SEC)
+
+        for key, label in [("dev", "📦  Caches Dev"), ("large", "🔍  Ficheiros Grandes"), ("history", "📋  Histórico")]:
+            btn = tk.Button(tab_f, text=label, bg=BG_PANEL, fg=TEXT_SEC,
+                           font=("Segoe UI", 9), bd=0, padx=14, pady=6,
+                           cursor="hand2", relief="flat",
+                           activebackground=ACCENT, activeforeground="white",
+                           command=lambda k=key: switch_tab(k))
+            btn.pack(side=tk.LEFT, padx=(0, 4))
+            tab_btns[key] = btn
+
+        dev_f = tk.Frame(tab_content, bg=BG_MAIN)
+        self._tools_frames["dev"] = (dev_f, tab_btns["dev"])
+        self._build_dev_tab(dev_f)
+
+        large_f = tk.Frame(tab_content, bg=BG_MAIN)
+        self._tools_frames["large"] = (large_f, tab_btns["large"])
+        self._build_large_tab(large_f)
+
+        hist_f = tk.Frame(tab_content, bg=BG_MAIN)
+        self._tools_frames["history"] = (hist_f, tab_btns["history"])
+        self._build_history_tab(hist_f)
+
+        switch_tab("dev")
+        return page
+
+    def _build_dev_tab(self, parent):
+        self._dev_results = []
+        hdr = tk.Frame(parent, bg=BG_MAIN)
+        hdr.pack(fill=tk.X, pady=(0, 8))
+        create_button(hdr, "🔍 Analisar", self._scan_dev_caches, "teal").pack(side=tk.LEFT, padx=4)
+        create_button(hdr, "🗑️ Limpar Seleccionado", self._clean_dev_selected, "primary").pack(side=tk.LEFT, padx=4)
+        create_button(hdr, "✨ Limpar Tudo (Seguro)", self._clean_dev_all, "warning").pack(side=tk.LEFT, padx=4)
+        self._dev_pb = ttk.Progressbar(parent, style="HC.Horizontal.TProgressbar", mode="determinate")
+        self._dev_pb.pack(fill=tk.X, pady=(0, 8))
+        paned = tk.PanedWindow(parent, orient=tk.HORIZONTAL, bg=BG_SIDEBAR, sashwidth=5, bd=0)
+        paned.pack(fill=tk.BOTH, expand=True)
+        left = create_card(paned, title="CACHES DETECTADAS")
+        paned.add(left, minsize=300, width=360)
+        self._dev_tree = ttk.Treeview(left, style="HC.Treeview",
+                                       columns=("size", "safe"), show="tree headings", selectmode="browse")
+        self._dev_tree.heading("#0", text="Ferramenta")
+        self._dev_tree.heading("size", text="Tamanho")
+        self._dev_tree.heading("safe", text="Seguro")
+        self._dev_tree.column("#0", width=180, stretch=True)
+        self._dev_tree.column("size", width=90, anchor=tk.E, stretch=False)
+        self._dev_tree.column("safe", width=60, anchor=tk.CENTER, stretch=False)
+        sb = ttk.Scrollbar(left, style="HC.Vertical.TScrollbar", command=self._dev_tree.yview)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+        self._dev_tree.configure(yscrollcommand=sb.set)
+        self._dev_tree.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+        self._dev_tree.bind("<<TreeviewSelect>>", self._on_dev_select)
+        self._dev_total_lbl = tk.Label(left, text="", font=("Segoe UI", 9, "bold"),
+                                        bg=BG_TOPBAR, fg=ACCENT, anchor=tk.E, padx=10, pady=4)
+        self._dev_total_lbl.pack(fill=tk.X)
+        right = create_card(paned, title="DETALHES")
+        paned.add(right, minsize=240)
+        self._dev_detail = tk.Text(right, bg=LOG_BG, fg=TEXT_PRI, font=("Consolas", 9),
+                                    bd=0, wrap=tk.WORD, state=tk.DISABLED)
+        sb2 = ttk.Scrollbar(right, style="HC.Vertical.TScrollbar", command=self._dev_detail.yview)
+        sb2.pack(side=tk.RIGHT, fill=tk.Y)
+        self._dev_detail.configure(yscrollcommand=sb2.set)
+        self._dev_detail.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+        for tag, color in [("header", ACCENT), ("ok", SUCCESS), ("warn", WARNING), ("dim", TEXT_MUT), ("size", YELLOW)]:
+            self._dev_detail.tag_config(tag, foreground=color)
+
+    def _scan_dev_caches(self):
+        self._dev_tree.delete(*self._dev_tree.get_children())
+        self._dev_pb["value"] = 0
+        self.set_status("A analisar caches de desenvolvimento...", "info")
+        threading.Thread(target=self._scan_dev_worker, daemon=True).start()
+
+    def _scan_dev_worker(self):
+        self._dev_results = scan_dev_caches()
+        self.after(0, self._refresh_dev_results)
+
+    def _refresh_dev_results(self):
+        self._dev_tree.delete(*self._dev_tree.get_children())
+        total = 0
+        for r in sorted(self._dev_results, key=lambda x: x["size"], reverse=True):
+            total += r["size"]
+            self._dev_tree.insert("", tk.END, iid=r["key"],
+                                   text=f"  {r['icon']}  {r['label']}",
+                                   values=(fmt(r["size"]), "✅" if r.get("safe") else "⚠️"),
+                                   tags=("found",))
+        self._dev_tree.tag_configure("found", foreground=WARNING)
+        self._dev_total_lbl.config(text=f"Total:  {fmt(total)}")
+        self._dev_pb["value"] = 100
+        self.set_status(f"Caches dev: {fmt(total)} detectados", "success")
+
+    def _on_dev_select(self, e=None):
+        sel = self._dev_tree.selection()
+        if not sel:
+            return
+        r = next((x for x in self._dev_results if x["key"] == sel[0]), None)
+        if not r:
+            return
+        dt = self._dev_detail
+        dt.config(state=tk.NORMAL)
+        dt.delete("1.0", tk.END)
+        dt.insert(tk.END, f"{r['icon']}  {r['label']}\n", "header")
+        dt.insert(tk.END, "─"*40+"\n", "dim")
+        dt.insert(tk.END, f"Tamanho: ", "dim")
+        dt.insert(tk.END, f"{fmt(r['size'])}\n", "size")
+        dt.insert(tk.END, f"Seguro: {'✅' if r.get('safe') else '⚠️'}\n",
+                   "ok" if r.get("safe") else "warn")
+        dt.insert(tk.END, f"\n{r.get('description', '')}\n", "dim")
+        for path, sz in r.get("paths_found", []):
+            dt.insert(tk.END, f"  {fmt(sz):>10}  {path}\n", "dim")
+        dt.config(state=tk.DISABLED)
+
+    def _clean_dev_selected(self):
+        sel = self._dev_tree.selection()
+        if not sel:
+            messagebox.showinfo("HCMaint", "Seleccione uma cache.")
+            return
+        r = next((x for x in self._dev_results if x["key"] == sel[0]), None)
+        if not r or r["size"] == 0:
+            return
+        if messagebox.askyesno("Limpar", f"Limpar {r['label']}?\nTamanho: {fmt(r['size'])}"):
+            threading.Thread(target=lambda: self._do_clean_dev([r]), daemon=True).start()
+
+    def _clean_dev_all(self):
+        safe = [r for r in self._dev_results if r.get("safe") and r["size"] > 0]
+        if not safe:
+            messagebox.showinfo("HCMaint", "Execute 'Analisar' primeiro.")
+            return
+        total = sum(r["size"] for r in safe)
+        if messagebox.askyesno("Limpar Tudo", f"Limpar {len(safe)} caches?\nTotal: {fmt(total)}"):
+            threading.Thread(target=lambda: self._do_clean_dev(safe), daemon=True).start()
+
+    def _do_clean_dev(self, caches):
+        total_freed = 0
+        for r in caches:
+            freed, _ = clean_dev_cache(r)
+            total_freed += freed
+            if freed > 0:
+                add_history_entry("limpeza", r["label"], freed)
+        self.after(0, lambda: self.set_status(f"Caches dev: {fmt(total_freed)} libertados", "success"))
+        self.after(500, self._scan_dev_caches)
+
+    def _build_large_tab(self, parent):
+        self._large_results = []
+        self._large_min_mb = tk.IntVar(value=50)
+        hdr = tk.Frame(parent, bg=BG_MAIN)
+        hdr.pack(fill=tk.X, pady=(0, 6))
+        tk.Label(hdr, text="Mínimo:", font=("Segoe UI", 9), bg=BG_MAIN, fg=TEXT_SEC).pack(side=tk.LEFT)
+        for mb in [50, 100, 250, 500]:
+            tk.Radiobutton(hdr, text=f"{mb} MB", variable=self._large_min_mb, value=mb,
+                           bg=BG_MAIN, fg=TEXT_PRI, selectcolor=BG_CARD,
+                           activebackground=BG_MAIN, font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=3)
+        create_button(hdr, "🔍 Pesquisar", self._scan_large_files, "teal").pack(side=tk.LEFT, padx=(10, 4))
+        create_button(hdr, "🗑️ Apagar Seleccionado", self._delete_large_selected, "danger").pack(side=tk.LEFT, padx=4)
+        create_button(hdr, "📄 Exportar", self._export_report, "olive").pack(side=tk.LEFT, padx=4)
+        self._large_status = tk.Label(parent, text="Clique em Pesquisar",
+                                       font=("Segoe UI", 9), bg=BG_MAIN, fg=TEXT_MUT, anchor=tk.W)
+        self._large_status.pack(fill=tk.X, padx=4, pady=(0, 4))
+        self._large_pb = ttk.Progressbar(parent, style="HC.Horizontal.TProgressbar", mode="indeterminate")
+        self._large_pb.pack(fill=tk.X, pady=(0, 8))
+        card = create_card(parent, title="FICHEIROS GRANDES")
+        card.pack(fill=tk.BOTH, expand=True)
+        cols = ("name", "size", "category", "path", "date")
+        self._large_tree = ttk.Treeview(card, style="HC.Treeview", columns=cols,
+                                         show="headings", selectmode="extended")
+        self._large_tree.heading("name", text="Nome")
+        self._large_tree.heading("size", text="Tamanho")
+        self._large_tree.heading("category", text="Tipo")
+        self._large_tree.heading("path", text="Caminho")
+        self._large_tree.heading("date", text="Modificado")
+        self._large_tree.column("name", width=200)
+        self._large_tree.column("size", width=90, anchor=tk.E)
+        self._large_tree.column("category", width=90, anchor=tk.CENTER)
+        self._large_tree.column("path", width=300)
+        self._large_tree.column("date", width=90, anchor=tk.CENTER)
+        sb = ttk.Scrollbar(card, style="HC.Vertical.TScrollbar", command=self._large_tree.yview)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+        self._large_tree.configure(yscrollcommand=sb.set)
+        self._large_tree.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+
+    def _scan_large_files(self):
+        self._large_tree.delete(*self._large_tree.get_children())
+        self._large_pb.start(10)
+        min_mb = self._large_min_mb.get()
+        self._large_status.config(text=f"A pesquisar ficheiros > {min_mb} MB...")
+        threading.Thread(target=lambda: self._scan_large_worker(min_mb), daemon=True).start()
+
+    def _scan_large_worker(self, min_mb):
+        def prog(msg):
+            self.after(0, lambda m=msg: self._large_status.config(text=m))
+        self._large_results = scan_large_files(min_size_mb=min_mb, progress_cb=prog)
+        self.after(0, self._refresh_large_results)
+
+    def _refresh_large_results(self):
+        self._large_pb.stop()
+        self._large_tree.delete(*self._large_tree.get_children())
+        stats = get_stats(self._large_results)
+        for f in self._large_results:
+            short_path = f["path"] if len(f["path"]) < 55 else "..." + f["path"][-52:]
+            self._large_tree.insert("", tk.END, values=(
+                f["name"], f["size_str"], f"{f['icon']} {f['category']}", short_path, f["modified_str"]))
+        n, total = stats["count"], stats["total"]
+        self._large_status.config(text=f"{n} ficheiros  •  Total: {fmt(total)}")
+        self.set_status(f"Ficheiros grandes: {n} ({fmt(total)})", "info")
+
+    def _delete_large_selected(self):
+        sel = self._large_tree.selection()
+        if not sel:
+            messagebox.showinfo("HCMaint", "Seleccione ficheiros.")
+            return
+        indices = [self._large_tree.index(s) for s in sel]
+        files = [self._large_results[i] for i in indices if i < len(self._large_results)]
+        total = sum(f["size"] for f in files)
+        if not messagebox.askyesno("Apagar", f"Apagar {len(files)} ficheiro(s)?\nTotal: {fmt(total)}\n\nIrreversível!"):
+            return
+        def worker():
+            freed = 0
+            for f in files:
+                ok, sz = delete_large_file(f["path"])
+                if ok:
+                    freed += sz
+            add_history_entry("limpeza", "Ficheiros Grandes", freed, items_count=len(files))
+            self.after(0, lambda: self.set_status(f"Apagados: {fmt(freed)}", "success"))
+            self.after(0, self._scan_large_files)
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _export_report(self):
+        from tkinter import filedialog
+        if not self._scan_results:
+            messagebox.showinfo("HCMaint", "Execute uma Análise primeiro.")
+            return
+        html = messagebox.askyesno("Formato", "Exportar como HTML?\nSim=HTML  Não=TXT")
+        ext = ".html" if html else ".txt"
+        ts = datetime.now().strftime("%Y%m%d")
+        path = filedialog.asksaveasfilename(
+            defaultextension=ext,
+            filetypes=[(ext.upper(), f"*{ext}"), ("Todos", "*.*")],
+            initialfile=f"HCMaint_relatorio_{ts}{ext}")
+        if not path:
+            return
+        fn = export_report_html if html else export_report_txt
+        ok, result = fn(self._scan_results, path)
+        if ok:
+            add_history_entry("exportar", "Relatório", 0, details=result)
+            messagebox.showinfo("Exportado", f"Guardado em:\n{result}")
+            try:
+                import subprocess
+                subprocess.Popen(["xdg-open", result])
+            except Exception:
+                pass
+        else:
+            messagebox.showerror("Erro", result)
+
+    def _build_history_tab(self, parent):
+        hdr = tk.Frame(parent, bg=BG_MAIN)
+        hdr.pack(fill=tk.X, pady=(0, 8))
+        create_button(hdr, "🔄 Actualizar", self._refresh_history, "teal").pack(side=tk.LEFT, padx=4)
+        create_button(hdr, "🗑️ Limpar Histórico", self._clear_history, "danger").pack(side=tk.LEFT, padx=4)
+        create_button(hdr, "📄 Exportar", self._export_report, "olive").pack(side=tk.LEFT, padx=4)
+        stats_f = tk.Frame(parent, bg=BG_MAIN)
+        stats_f.pack(fill=tk.X, pady=(0, 8))
+        self._hist_stat_labels = {}
+        for title, key in [("Total Libertado", "freed"), ("Operações", "ops"), ("Última Limpeza", "last")]:
+            c = tk.Frame(stats_f, bg=BG_CARD, highlightthickness=1, highlightbackground=BORDER)
+            c.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
+            tk.Label(c, text=title, font=("Segoe UI", 8), bg=BG_CARD, fg=TEXT_MUT).pack(pady=(8, 0))
+            v = tk.Label(c, text="—", font=("Segoe UI", 13, "bold"), bg=BG_CARD, fg=ACCENT)
+            v.pack(pady=(0, 8))
+            self._hist_stat_labels[key] = v
+        card = create_card(parent, title="HISTÓRICO DE LIMPEZAS")
+        card.pack(fill=tk.BOTH, expand=True)
+        cols = ("date", "action", "category", "freed", "details")
+        self._hist_tree = ttk.Treeview(card, style="HC.Treeview", columns=cols,
+                                        show="headings", selectmode="browse")
+        for col, hd, w, anc in [
+            ("date","Data/Hora",120,tk.CENTER), ("action","Acção",80,tk.CENTER),
+            ("category","Categoria",180,tk.W), ("freed","Libertado",90,tk.E),
+            ("details","Detalhes",260,tk.W)]:
+            self._hist_tree.heading(col, text=hd)
+            self._hist_tree.column(col, width=w, anchor=anc)
+        sb = ttk.Scrollbar(card, style="HC.Vertical.TScrollbar", command=self._hist_tree.yview)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+        self._hist_tree.configure(yscrollcommand=sb.set)
+        self._hist_tree.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+        self._refresh_history()
+
+    def _refresh_history(self):
+        history = load_history()
+        stats = get_history_stats(history)
+        self._hist_stat_labels["freed"].config(text=stats.get("total_freed_str", "0 B"))
+        self._hist_stat_labels["ops"].config(text=str(stats.get("total_operations", 0)))
+        self._hist_stat_labels["last"].config(text=stats.get("last_clean", "—") or "—")
+        self._hist_tree.delete(*self._hist_tree.get_children())
+        for entry in reversed(history):
+            icon = "🧹" if entry.get("action") == "limpeza" else "📄"
+            freed = entry.get("freed_str", "—") if entry.get("freed", 0) > 0 else "—"
+            self._hist_tree.insert("", tk.END, values=(
+                entry.get("date",""), f"{icon} {entry.get('action','')}",
+                entry.get("category",""), freed, entry.get("details","")[:60]))
+
+    def _clear_history(self):
+        if messagebox.askyesno("Limpar Histórico", "Apagar todo o histórico?"):
+            clear_history()
+            self._refresh_history()
+            self.set_status("Histórico apagado", "info")
+
+    # ── Página Espaço ───────────────────────────────────────────────────────────
+
+    def _pg_disk(self):
+        page = tk.Frame(self._content, bg=BG_MAIN)
+
+        hdr = tk.Frame(page, bg=BG_MAIN)
+        hdr.pack(fill=tk.X, padx=20, pady=(16, 6))
+        tk.Label(hdr, text="💾  Análise de Espaço em Disco", font=("Segoe UI", 16, "bold"),
+                 bg=BG_MAIN, fg=TEXT_PRI).pack(side=tk.LEFT)
+        create_button(hdr, "🔄 Actualizar", self._run_disk, "teal").pack(side=tk.RIGHT)
+        tk.Frame(page, bg=DIVIDER, height=1).pack(fill=tk.X, padx=20, pady=4)
+
+        # Barras de partições
+        part_card = create_card(page, title="PARTIÇÕES MONTADAS")
+        part_card.pack(fill=tk.X, padx=20, pady=(8, 0))
+        self._disk_parts_frame = tk.Frame(part_card, bg=BG_CARD)
+        self._disk_parts_frame.pack(fill=tk.X, padx=10, pady=8)
+
+        # Top maiores pastas
+        big_card = create_card(page, title="MAIORES PASTAS ( ~ e /var )")
+        big_card.pack(fill=tk.BOTH, expand=True, padx=20, pady=(8, 14))
+
+        cols = ("size", "path")
+        self._disk_tree = ttk.Treeview(big_card, style="HC.Treeview",
+                                        columns=cols, show="headings",
+                                        selectmode="none")
+        self._disk_tree.heading("size", text="Tamanho")
+        self._disk_tree.heading("path", text="Caminho")
+        self._disk_tree.column("size", width=100, anchor=tk.E)
+        self._disk_tree.column("path", width=600)
+
+        sb = ttk.Scrollbar(big_card, style="HC.Vertical.TScrollbar", command=self._disk_tree.yview)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+        self._disk_tree.configure(yscrollcommand=sb.set)
+        self._disk_tree.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+
+        return page
+
+    def _run_disk(self):
+        self.set_status("A analisar disco...", "info")
+        threading.Thread(target=self._run_disk_worker, daemon=True).start()
+
+    def _run_disk_worker(self):
+        import shutil as sh
+
+        # Partições
+        try:
+            import subprocess
+            rc, out, _ = (lambda r: (r.returncode, r.stdout, r.stderr))(
+                subprocess.run(["df", "-h", "--output=target,size,used,avail,pcent,fstype"],
+                               capture_output=True, text=True))
+            partitions = []
+            if rc == 0:
+                for line in out.splitlines()[1:]:
+                    parts = line.split()
+                    if len(parts) >= 5 and parts[0].startswith("/"):
+                        mount, size, used, avail, pct, *_ = parts
+                        try:
+                            pct_val = int(pct.replace("%", ""))
+                        except Exception:
+                            pct_val = 0
+                        partitions.append((mount, size, used, avail, pct_val))
+        except Exception:
+            partitions = []
+
+        # Maiores pastas
+        top = scan_disk_usage_top()
+
+        self.after(0, lambda: self._refresh_disk(partitions, top))
+
+    def _refresh_disk(self, partitions, top):
+        # Limpar frame de partições
+        for w in self._disk_parts_frame.winfo_children():
+            w.destroy()
+
+        for mount, size, used, avail, pct in partitions[:6]:
+            row = tk.Frame(self._disk_parts_frame, bg=BG_CARD)
+            row.pack(fill=tk.X, pady=3)
+
+            # Label
+            tk.Label(row, text=f"{mount}",
+                     width=20, anchor=tk.W,
+                     font=("Consolas", 9), bg=BG_CARD, fg=TEXT_PRI).pack(side=tk.LEFT)
+
+            # Barra de progresso
+            bar_bg = tk.Frame(row, bg=BG_PANEL, height=14, width=300)
+            bar_bg.pack(side=tk.LEFT, padx=8)
+            bar_bg.pack_propagate(False)
+            color = DANGER if pct > 85 else (WARNING if pct > 60 else SUCCESS)
+            bar_fill = tk.Frame(bar_bg, bg=color, height=14,
+                                width=max(2, int(300 * pct / 100)))
+            bar_fill.place(x=0, y=0)
+
+            tk.Label(row, text=f"{pct}%  {used}/{size}  (livre: {avail})",
+                     font=("Consolas", 9), bg=BG_CARD, fg=TEXT_MUT).pack(side=tk.LEFT)
+
+        # Maiores pastas
+        self._disk_tree.delete(*self._disk_tree.get_children())
+        for size_str, path in top:
+            self._disk_tree.insert("", tk.END, values=(size_str, path))
+
+        self.set_status("Análise de disco actualizada", "success")
+
+
+# ─── Entry point ──────────────────────────────────────────────
+
 if __name__ == "__main__":
-    if platform.system() != "Windows":
-        r = tk.Tk(); r.withdraw()
-        messagebox.showwarning("HC-Cleaner",
-            "⚠️  O HC-Cleaner foi desenvolvido para Windows.\n\n"
-            "Algumas funções (registo, desinstalador, Windows Defender)\n"
-            "não estarão disponíveis neste sistema operativo.\n\n"
-            "A interface continuará funcional para demonstração.")
-        r.destroy()
-    app = HCCleaner()
+    app = HCMaint()
     app.mainloop()

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=HCMaint
+Comment=Ferramenta de Manutenção Linux — HCsoftware
+Exec=bash /opt/HCMaint/run.sh
+Icon=/opt/HCMaint/imagens/HCsoftware.png
+Terminal=false
+Categories=System;Utility;
+StartupNotify=true

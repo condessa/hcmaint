@@ -1,125 +1,106 @@
-# 🛡️ HCMaint Suite
-**HCsoftware** — Ferramentas de Manutenção e Limpeza do Sistema
+# 🐧 HCMaint
 
-Suite completa de manutenção para **Linux** e **Windows**, desenvolvida em Python/Tkinter
-com o tema visual HCsoftware. Alternativa limpa ao CCleaner (Windows) e BleachBit (Linux)
-— sem telemetria, sem bloatware, código aberto.
+**HCsoftware** — Ferramenta de Manutenção do Linux (Debian/Ubuntu/Mint)
+
+Interface gráfica em Python/Tkinter para limpeza e manutenção do sistema Linux,
+desenvolvida como alternativa leve ao BleachBit — sem telemetria, sem bloatware,
+com tema visual HCsoftware.
 
 > Testado em produção: libertou **+17 GB** num Debian com uso real.
 
 ---
 
-## 📦 Projectos
+## ✨ Funcionalidades
 
-### 🐧 [HCMaint — Linux](./linux/)
-Ferramenta de manutenção para **Debian / Ubuntu / Linux Mint**
+### 🔍 Análise Inteligente
+Só mostra o que **realmente pode ser removido** — não reporta como "lixo" o que é obrigatório:
 
-| Funcionalidade | Detalhe |
-|---|---|
-| Cache APT | Remove `.deb` acumulados |
-| Pacotes Órfãos | `apt autoremove --purge` com streaming |
-| Logs Systemd | Vacuum inteligente (só conta o removível) |
-| Cache Utilizador | Selecção granular por subpasta |
-| Flatpak | Runtimes obsoletos (via flatpak nativo) |
-| Snap | Só versões removíveis — exclui `core*`/`snapd` |
-| Docker | Containers parados + imagens dangling |
-| Análise de Espaço | Barras visuais de partições + top pastas |
-
-```bash
-cd linux
-bash run.sh              # utilizador normal
-bash run.sh --sudo       # acesso total
-```
-
----
-
-### 🪟 [HCCleaner — Windows](./windows/)
-Ferramenta de manutenção para **Windows 10 / 11**
-
-| Funcionalidade | Detalhe |
-|---|---|
-| Limpeza de Ficheiros | Temp, cache browsers, prefetch, dumps, logs |
-| Registo do Windows | Entradas inválidas, órfãos, DLLs inexistentes |
-| Gestor de Programas | Lista + desinstalação via desinstalador oficial |
-| Detecção de Ameaças | Análise heurística + lança Windows Defender |
-
-```batch
-cd windows
-python main.py           # executar directamente
-build.bat                # compilar para .exe (requer PyInstaller)
-```
-
----
-
-## 🎨 Tema Partilhado
-
-Ambos os projectos usam o tema visual **HCsoftware** (`shared/hc_theme.py`):
-
-| Constante | Cor | Uso |
+| Categoria | O que detecta | Inteligência |
 |---|---|---|
-| `BG_MAIN` | `#2b2b2b` | Fundo principal |
-| `ACCENT` | `#4a90d9` | Azul accent |
-| `WARNING` | `#f0ad4e` | Alertas |
-| `SUCCESS` | `#5cb85c` | Sucesso |
-| `DANGER` | `#d9534f` | Erros |
-| `YELLOW` | `#FFD700` | Valores de destaque |
+| Cache APT | `.deb` em `/var/cache/apt/archives/` | ✅ |
+| Pacotes Órfãos | Dependências sem uso (`autoremove`) | ✅ |
+| Logs Systemd | Journal com >30 dias | Só conta o removível |
+| Logs Antigos | `*.gz`, `*.1`, `*.old` em `/var/log/` | ✅ |
+| Cache Utilizador | Subpastas de `~/.cache/` por tamanho | Selecção granular |
+| Miniaturas | `~/.cache/thumbnails/` | ✅ |
+| Reciclagem | `~/.local/share/Trash/` | ✅ |
+| Flatpak | Runtimes não utilizados (via `flatpak`) | Confia no flatpak |
+| Snap | Só versões desactivadas removíveis | Exclui `core*`/`snapd` |
+| Docker | Containers parados + imagens dangling | ✅ |
+| Cache Python | `__pycache__/` e `.pyc` em `~/Programas/` | ✅ |
+
+### 🧹 Limpeza
+- Limpeza individual por categoria com **log em tempo real**
+- Botão "Limpeza Segura" para categorias 100% seguras com um clique
+- Diálogo de selecção granular para `~/.cache/`
+- Re-análise automática após cada limpeza
+
+### 💾 Análise de Espaço
+- Barras visuais de uso de cada partição montada
+- Top maiores pastas em `~` e `/var`
+
+### 📊 Dashboard
+- Cards clicáveis com navegação directa
+- Log de actividade com timestamps
+- Análise rápida com um clique
 
 ---
 
-## 🚀 Instalação Rápida
+## 🚀 Instalação
 
-### Linux
+### Dependências
 ```bash
 sudo apt-get install python3-tk python3-pip
-cd linux && bash run.sh
 ```
 
-### Windows
-```batch
-pip install Pillow
-cd windows && python main.py
+### Executar
+```bash
+cd ~/Programas/HCMaint
+bash run.sh              # utilizador normal
+bash run.sh --sudo       # acesso total (APT, Snap, logs de sistema)
 ```
 
----
-
-## 📁 Estrutura do Repositório
-
-```
-hcmaint/
-├── linux/                  ← HCMaint (Debian/Ubuntu/Mint)
-│   ├── main.py
-│   ├── hc_theme.py
-│   ├── modules/
-│   │   └── scanner.py
-│   ├── run.sh
-│   └── hcmaint.desktop
-│
-├── windows/                ← HCCleaner (Windows 10/11)
-│   ├── main.py
-│   ├── hc_theme.py
-│   ├── modules/
-│   │   ├── cleaner.py
-│   │   ├── registry.py
-│   │   ├── uninstaller.py
-│   │   └── malware.py
-│   └── build.bat
-│
-├── shared/
-│   └── hc_theme.py         ← Tema HCsoftware (referência)
-│
-└── README.md
+### Instalar no menu do sistema
+```bash
+sudo cp -r . /opt/HCMaint
+sudo cp hcmaint.desktop /usr/share/applications/
+sudo chmod +x /opt/HCMaint/run.sh
 ```
 
 ---
 
-## 🛠️ Requisitos
+## 📁 Estrutura
 
-| | Linux | Windows |
-|---|---|---|
-| Python | 3.10+ | 3.10+ |
-| Tkinter | `python3-tk` | incluído |
-| Pillow | `pip install Pillow` | `pip install Pillow` |
-| Extras | — | `winreg` (incluído) |
+```
+HCMaint/
+├── main.py              ← Interface principal (Tkinter, 4 páginas)
+├── hc_theme.py          ← Tema visual HCsoftware
+├── modules/
+│   └── scanner.py       ← 11 scanners + executores de limpeza
+├── run.sh               ← Script de arranque (instala deps automaticamente)
+├── hcmaint.desktop      ← Entrada para menu GNOME/KDE/XFCE
+├── requirements.txt
+└── imagens/
+    └── HCsoftware.png
+```
+
+---
+
+## ⚠️ Notas
+
+- APT, Snap e limpeza de `/var/log/` requerem `sudo` (ou `pkexec`)
+- A ferramenta **nunca remove** sem confirmação explícita
+- Snaps de sistema (`core22`, `core24`, `snapd`) são correctamente identificados como não removíveis e não contam para o total
+- Flatpak, Snap e Docker só aparecem se estiverem instalados no sistema
+- O journal só reporta tamanho removível (logs >30 dias), não o total
+
+---
+
+## 🖼️ Screenshots
+
+> Dashboard com análise em tempo real e cards clicáveis  
+> Página de Análise com painel de detalhes por categoria  
+> Limpeza com log de output em tempo real  
 
 ---
 
