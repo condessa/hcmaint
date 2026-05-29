@@ -52,7 +52,8 @@ GITHUB_DL_URL = f"https://github.com/{GITHUB_REPO}/archive/refs/heads/main.zip"
 
 def check_for_updates(current_version, callback):
     """
-    Verifica actualizações no GitHub em background.
+    Verifica actualizações Linux no GitHub em background.
+    Procura especificamente por releases com prefixo "linux-".
     callback(latest_version, release_notes) se há actualização.
     callback(None, None) se está actualizado ou erro.
     """
@@ -60,22 +61,35 @@ def check_for_updates(current_version, callback):
     import json
     import re
 
+    # URL para listar todas as releases (não só a latest)
+    RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases"
+
     try:
         req = urllib.request.Request(
-            GITHUB_API,
+            RELEASES_API,
             headers={"User-Agent": f"HCMaint/{current_version}"},
         )
         with urllib.request.urlopen(req, timeout=8) as r:
-            data = json.loads(r.read().decode())
+            releases = json.loads(r.read().decode())
 
-        tag          = data.get("tag_name", "")
-        release_body = data.get("body", "")
+        # Filtrar só releases com prefixo "linux-"
+        linux_releases = [
+            rel for rel in releases
+            if rel.get("tag_name", "").startswith("linux-")
+        ]
 
-        # Extrair versão do tag — ex: "linux-v1.1.1-build3" → "1.1.1"
+        if not linux_releases:
+            # Nenhuma release Linux publicada ainda — silencioso
+            callback(None, None)
+            return
+
+        # A mais recente (primeira da lista — GitHub ordena por data)
+        latest_rel  = linux_releases[0]
+        tag          = latest_rel.get("tag_name", "")
+        release_body = latest_rel.get("body", "")
+
+        # Extrair versão — ex: "linux-v1.1.1-build3" → "1.1.1"
         m = re.search(r"v([0-9]+\.[0-9]+\.[0-9]+)", tag)
-        if not m:
-            # Tentar extrair de qualquer tag
-            m = re.search(r"([0-9]+\.[0-9]+\.[0-9]+)", tag)
         if not m:
             callback(None, None)
             return
