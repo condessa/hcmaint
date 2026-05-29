@@ -293,6 +293,7 @@ class HCMaint(HCApplication):
             ("🧹", "Limpeza",     "clean"),
             ("🛠️", "Ferramentas", "tools"),
             ("💾", "Espaço",      "disk"),
+            ("ℹ️",  "Sobre",       "about"),
         ]:
             btn = NavBtn(sidebar, icon, label, lambda k=key: self._show(k))
             btn.pack(fill=tk.X)
@@ -311,6 +312,7 @@ class HCMaint(HCApplication):
         self._pages["clean"]     = self._pg_clean()
         self._pages["tools"]     = self._pg_tools()
         self._pages["disk"]      = self._pg_disk()
+        self._pages["about"]     = self._pg_about()
 
     def _show(self, key):
         if self._current:
@@ -1485,6 +1487,138 @@ class HCMaint(HCApplication):
             self._disk_tree.insert("", tk.END, values=(size_str, path))
 
         self.set_status("Análise de disco actualizada", "success")
+
+
+    # ── Página Sobre ────────────────────────────────────────────
+
+    def _pg_about(self):
+        import platform as _platform
+
+        page = tk.Frame(self._content, bg=BG_MAIN)
+
+        hdr = tk.Frame(page, bg=BG_MAIN)
+        hdr.pack(fill=tk.X, padx=20, pady=(16, 6))
+        tk.Label(hdr, text="ℹ️  Sobre o HCMaint", font=("Segoe UI", 16, "bold"),
+                 bg=BG_MAIN, fg=TEXT_PRI).pack(side=tk.LEFT)
+        tk.Frame(page, bg=DIVIDER, height=1).pack(fill=tk.X, padx=20, pady=4)
+
+        # Card central com logo + info
+        center = tk.Frame(page, bg=BG_MAIN)
+        center.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
+
+        # Card principal
+        main_card = tk.Frame(center, bg=BG_CARD,
+                              highlightthickness=1, highlightbackground=BORDER)
+        main_card.pack(fill=tk.X, pady=(0, 12))
+
+        # Logo e título
+        logo_f = tk.Frame(main_card, bg=BG_CARD)
+        logo_f.pack(pady=24)
+
+        if self.logo_image:
+            tk.Label(logo_f, image=self.logo_image, bg=BG_CARD).pack()
+
+        tk.Label(logo_f, text="HCMaint",
+                 font=("Segoe UI", 22, "bold"),
+                 bg=BG_CARD, fg=ACCENT).pack(pady=(10, 0))
+        tk.Label(logo_f, text="Ferramenta de Manutenção do Linux",
+                 font=("Segoe UI", 11),
+                 bg=BG_CARD, fg=TEXT_MUT).pack()
+        tk.Label(logo_f, text=f"v{APP_VERSION}",
+                 font=("Segoe UI", 10),
+                 bg=BG_CARD, fg=TEXT_SEC).pack(pady=(4, 0))
+
+        tk.Frame(main_card, bg=DIVIDER, height=1).pack(fill=tk.X, padx=20, pady=8)
+
+        # Grid de informações
+        grid = tk.Frame(main_card, bg=BG_CARD)
+        grid.pack(fill=tk.X, padx=30, pady=(0, 20))
+
+        def info_row(label, value, color=TEXT_PRI):
+            row = tk.Frame(grid, bg=BG_CARD)
+            row.pack(fill=tk.X, pady=3)
+            tk.Label(row, text=label, font=("Segoe UI", 9),
+                     bg=BG_CARD, fg=TEXT_MUT, width=18, anchor=tk.W).pack(side=tk.LEFT)
+            tk.Label(row, text=value, font=("Segoe UI", 9, "bold"),
+                     bg=BG_CARD, fg=color, anchor=tk.W).pack(side=tk.LEFT)
+
+        info_row("Versão",        f"v{APP_VERSION}", ACCENT)
+        info_row("Autor",         "HCsoftware")
+        info_row("Localização",   "Silves, Algarve, Portugal")
+        info_row("Licença",       "Uso privado e pessoal")
+        info_row("Plataforma",    "Linux (Debian/Ubuntu/Mint)")
+        info_row("Repositório",   "github.com/condessa/hcmaint", INFO)
+
+        tk.Frame(main_card, bg=DIVIDER, height=1).pack(fill=tk.X, padx=20, pady=4)
+
+        # Info do sistema
+        sys_grid = tk.Frame(main_card, bg=BG_CARD)
+        sys_grid.pack(fill=tk.X, padx=30, pady=(0, 20))
+
+        try:
+            import tkinter
+            tk_ver = tkinter.TkVersion
+        except Exception:
+            tk_ver = "—"
+
+        py_ver = _platform.python_version()
+        so_info = f"{_platform.system()} {_platform.release()}"
+        arch    = _platform.machine()
+
+        tk.Label(sys_grid, text="SISTEMA", font=("Segoe UI", 8, "bold"),
+                 bg=BG_CARD, fg=TEXT_MUT).pack(anchor=tk.W, pady=(0, 4))
+
+        def sys_row(label, value, color=TEXT_SEC):
+            row = tk.Frame(sys_grid, bg=BG_CARD)
+            row.pack(fill=tk.X, pady=2)
+            tk.Label(row, text=label, font=("Segoe UI", 9),
+                     bg=BG_CARD, fg=TEXT_MUT, width=18, anchor=tk.W).pack(side=tk.LEFT)
+            tk.Label(row, text=value, font=("Segoe UI", 9, "bold"),
+                     bg=BG_CARD, fg=color, anchor=tk.W).pack(side=tk.LEFT)
+
+        sys_row("SO",         so_info)
+        sys_row("Arquitectura", arch)
+        sys_row("Python",     py_ver,       SUCCESS)
+        sys_row("Interface",  "Tkinter",    SUCCESS)
+        sys_row("Root",       "Sim ✅" if is_root() else "Não", SUCCESS if is_root() else WARNING)
+
+        # Cards de funcionalidades
+        feats_f = tk.Frame(center, bg=BG_MAIN)
+        feats_f.pack(fill=tk.X)
+
+        feats = [
+            ("🧹", "Limpeza",         "Cache APT, logs,\nFlatpak, Snap, Docker"),
+            ("🛠️", "Ferramentas",     "Caches dev, ficheiros grandes,\nhistórico, relatório"),
+            ("💾", "Espaço em Disco", "Barras de partições,\nmaiores pastas"),
+            ("🔄", "Actualizações",   "Verificação automática\nvia GitHub"),
+        ]
+
+        for icon, title, desc in feats:
+            c = tk.Frame(feats_f, bg=BG_CARD,
+                         highlightthickness=1, highlightbackground=BORDER)
+            c.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4)
+            tk.Label(c, text=icon, font=("Segoe UI Emoji", 18),
+                     bg=BG_CARD).pack(pady=(12, 2))
+            tk.Label(c, text=title, font=("Segoe UI", 9, "bold"),
+                     bg=BG_CARD, fg=ACCENT).pack()
+            tk.Label(c, text=desc, font=("Segoe UI", 8),
+                     bg=BG_CARD, fg=TEXT_MUT,
+                     justify=tk.CENTER).pack(pady=(2, 12))
+
+        # Botão verificar actualizações
+        btn_f = tk.Frame(page, bg=BG_MAIN)
+        btn_f.pack(pady=12)
+        create_button(btn_f, "🔄  Verificar Actualizações",
+                      self._check_updates_background, "teal").pack(side=tk.LEFT, padx=6)
+        create_button(btn_f, "🌐  GitHub",
+                      lambda: __import__('webbrowser').open(f"https://github.com/{GITHUB_REPO}"),
+                      "secondary").pack(side=tk.LEFT, padx=6)
+
+        # Rodapé
+        tk.Label(page, text=f"HCsoftware © 2026  •  v{APP_VERSION}  •  Silves, Algarve",
+                 font=("Segoe UI", 8), bg=BG_MAIN, fg=TEXT_MUT).pack(pady=(0, 10))
+
+        return page
 
 
 # ─── Entry point ──────────────────────────────────────────────
