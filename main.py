@@ -1549,6 +1549,20 @@ class HCMaint(HCApplication):
         info_row("Plataforma",    "Linux (Debian/Ubuntu/Mint)")
         info_row("Repositório",   "github.com/condessa/hcmaint", INFO)
 
+        # Email clicável
+        email_row = tk.Frame(grid, bg=BG_CARD)
+        email_row.pack(fill=tk.X, pady=3)
+        tk.Label(email_row, text="Contacto", font=("Segoe UI", 9),
+                 bg=BG_CARD, fg=TEXT_MUT, width=18, anchor=tk.W).pack(side=tk.LEFT)
+        email_lbl = tk.Label(email_row, text="condessasilva@gmail.com",
+                              font=("Segoe UI", 9, "bold"),
+                              bg=BG_CARD, fg=INFO, cursor="hand2", anchor=tk.W)
+        email_lbl.pack(side=tk.LEFT)
+        email_lbl.bind("<Button-1>", lambda e: __import__('webbrowser').open(
+            "mailto:condessasilva@gmail.com?subject=HCMaint%20v" + APP_VERSION))
+        email_lbl.bind("<Enter>", lambda e: email_lbl.config(fg=ACCENT, font=("Segoe UI", 9, "bold underline")))
+        email_lbl.bind("<Leave>", lambda e: email_lbl.config(fg=INFO,   font=("Segoe UI", 9, "bold")))
+
         tk.Frame(main_card, bg=DIVIDER, height=1).pack(fill=tk.X, padx=20, pady=4)
 
         # Info do sistema
